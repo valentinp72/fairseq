@@ -53,6 +53,12 @@ class SpeechToTextTask(LegacyFairseqTask):
             metavar="N",
             help="max number of tokens in the target sequence",
         )
+        parser.add_argument(
+            "--subtasks", 
+            default=None,
+            type=str, 
+            metavar='STR', 
+            help="List of subtasks separated by _")
 
     def __init__(self, args, tgt_dict):
         super().__init__(args)
@@ -146,6 +152,7 @@ class SpeechToTextTask(LegacyFairseqTask):
             seed=self.args.seed,
             speaker_to_id=self.speaker_to_id,
             multitask=self.multitask_tasks,
+            subtasks=self.args.subtasks,
         )
 
     @property

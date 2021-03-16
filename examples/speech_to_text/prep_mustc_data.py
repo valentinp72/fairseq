@@ -262,9 +262,13 @@ def process_joint(args):
             df = load_df_from_tsv(tsv_path)
             for t in df["tgt_text"]:
                 f.write(t + "\n")
+            if args.joint_asr_st and lang == "fr": # based on number of sentences 
+                for t in df["src_text"]:
+                    f.write(t + "\n")
         special_symbols = None
         if args.task == 'st':
-            special_symbols = [f'<lang:{lang}>' for lang in MUSTC.LANGUAGES]
+            special_symbols = [f'<lang:{lang}>' for lang in MUSTC.LANGUAGES] \
+                if not args.joint_asr_st else [f'<lang:{lang}>' for lang in MUSTC.LANGUAGES+["en"]]
         gen_vocab(
             Path(f.name),
             cur_root / spm_filename_prefix,
@@ -302,16 +306,6 @@ def main():
     parser.add_argument("--vocab-size", default=8000, type=int)
     parser.add_argument("--task", type=str, choices=["asr", "st"])
     parser.add_argument("--joint", action="store_true", help="")
-    parser.add_argument(
-        "--cmvn-type", default="utterance",
-        choices=["global", "utterance"],
-        help="The type of cepstral mean and variance normalization"
-    )
-    parser.add_argument(
-        "--gcmvn-max-num", default=150000, type=int,
-        help="Maximum number of sentences to use to estimate global mean and "
-             "variance"
-        )
     parser.add_argument("--use-audio-input", action="store_true")
     parser.add_argument("--zip-file", action="store_true")
     parser.add_argument("--langs", default=None, type=str, 
@@ -319,6 +313,15 @@ def main():
     parser.add_argument("--min-n-frames", default=5, type=int)
     parser.add_argument("--max-n-frames", default=3000, type=int)
     parser.add_argument("--speed-pertub", default=1.0, type=float)
+    parser.add_argument("--joint-asr-st", action="store_true", help="")
+    parser.add_argument("--cmvn-type", default="utterance",
+                        choices=["global", "utterance"],
+                        help="The type of cepstral mean and variance normalization")
+    parser.add_argument("--gcmvn-max-num", default=150000, type=int,
+                        help=(
+                            "Maximum number of sentences to use to estimate"
+                            "global mean and variance"
+                            ))
     args = parser.parse_args()
 
     if args.joint:
