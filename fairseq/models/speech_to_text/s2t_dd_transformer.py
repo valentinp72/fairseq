@@ -48,7 +48,22 @@ class S2TDualDecoderTransformerModel(FairseqEncoderDecoderModel):
     def add_args(parser):
         """Add model-specific arguments to the parser."""
         # input
-        S2TTransformerModel.add_args(parser)     
+        S2TTransformerModel.add_args(parser)
+        
+        # args for Dual-decoder Transformer model from `"Dual-decoder Transformer for 
+        # Joint ASR and Multilingual ST (Le et al., 2020)
+        parser.add_argument('--merge-operator', type=str, metavar='STR', default=None,
+                            choices=["sum", "concat"],
+                            help="Operator used when merging dual-attention with main branch")
+        parser.add_argument('--dual-attn-position', type=str, metavar='STR', default=None,
+                            choices=["at-self", "at-source", "at-self-and-source"],
+                            help="Position of the dual-attention module")
+        parser.add_argument('--merge-sum-weight-init', type=float, metavar='D', default=0.0,
+                            help="Init weight for sum merging operator")
+        parser.add_argument('--wait-k-asr', default=0, type=int,
+                            help='ASR decoder is k steps ahead of ST decoder.')
+        parser.add_argument('--wait-k-st', default=0, type=int,
+                            help='ST decoder is k steps ahead of ASR decoder.')
 
     @classmethod
     def build_encoder(cls, args):

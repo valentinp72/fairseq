@@ -114,8 +114,6 @@ class mTEDx(Dataset):
                         _id,
                     )
                 )
-        # sort by n_frames
-        self.data = sorted(self.data, key=lambda x: x[2])
 
     def __getitem__(self, n: int) -> Tuple[Tensor, int, str, str, str, str, str]:
         wav_path, offset, n_frames, sr, src_utt, tgt_utt, spk_id, tgt_lang, utt_id = self.data[n]
@@ -160,9 +158,8 @@ def process(args):
                     )
             else:
                 for _, features, sample_rate, _, _, _, _, utt_id in tqdm(dataset):
-                    if not os.path.isfile(feature_root / f"{utt_id}.npy"):
-                        output_path = feature_root / f"{utt_id}.npy"
-                        np.save(output_path.as_posix(), features)
+                    output_path = feature_root / f"{utt_id}.npy"
+                    np.save(output_path.as_posix(), features)
         # Pack features into ZIP
         zip_path = cur_root / "fbank80.zip" if not args.use_w2v_feats else cur_root / "w2v2_feats.zip"
         print("ZIPing features...")

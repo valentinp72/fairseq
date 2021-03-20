@@ -65,14 +65,6 @@ class DualDecoderTransformerModel(FairseqEncoderDecoderModel):
         """Add model-specific arguments to the parser."""
         # fmt: off
         TransformerModel.add_args(parser)
-        # args for Dual-decoder Transformer model from `"Dual-decoder Transformer for Joint ASR and Multilingual ST (Le et al., 2020)
-        parser.add_argument('--dd-merge-operator', type=str, metavar='STR', default=None,
-                            choices=["sum", "concat"],
-                            help="Operator used when merging dual-attention with main branch")
-        parser.add_argument('--dual-attn-position', type=str, metavar='STR', default=None,
-                            choices=["at-self", "at-source", "at-self-and-source"],
-                            help="Position of the dual-attention module")
-
         # fmt: on
 
     @classmethod
@@ -214,7 +206,11 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         super().__init__(dictionary)
         self.register_buffer("version", torch.Tensor([3]))
         self._future_mask = (torch.empty(0), torch.empty(0))
-        self.subtasks = args.subtasks
+        self._future_mask_dual = (torch.empty(0), torch.empty(0))
+        self.subtasks = getattr(args, "subtasks", None)
+        self.merge_operator = getattr(args, "merge_operator", None)
+        self.wait_k_asr = getattr(args, "wait_k_asr", 0)
+        self.wait_k_st = getattr(args, "wait_k_st", 0)
 
         self.dropout_module = nn.ModuleDict({k: FairseqDropout(
             args.dropout, module_name=self.__class__.__name__
@@ -456,11 +452,13 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         x = tuple(x_tmp)
 
         self_attn_padding_mask: Optional[List[Tensor]] = [None, None]
+        dual_attn_padding_mask: Optional[List[Tensor]] = [None, None]
         if self.cross_self_attention or \
             any([prev_output_tokens[i].eq(self.padding_idx).any() \
                 for i in range(len(self.subtasks))]):
             for i in range(len(self.subtasks)):
                 self_attn_padding_mask[i] = prev_output_tokens[i].eq(self.padding_idx)
+                dual_attn_padding_mask[i] = prev_output_tokens[1-i].eq(self.padding_idx)
 
         # dual-decoder layers
         attn: Optional[Tensor] = None
@@ -468,11 +466,11 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         for idx, layer in enumerate(self.layers):
             if incremental_state is None and not full_context_alignment:
                 self_attn_mask = self.buffered_future_mask(x)
+                dual_attn_mask = self.buffered_future_mask(x, dual_attn=True)
             else:
-                self_attn_mask = None
+                self_attn_mask = (None, None)
+                dual_attn_mask = (None, None)
 
-            # logging.info(f'self_attn_mask: {[e.shape for e in self_attn_mask]}') # [[0, -inf, ..., -inf], [0, 0, -inf, ..., -inf], ... [0, 0, ..., 0]]
-            # logging.info(f'self_attn_padding_mask: {[e.shape for e in self_attn_padding_mask]}')
             x, layer_attn, _ = layer(
                 x,
                 encoder_out["encoder_out"][0]
@@ -489,6 +487,8 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
                 self_attn_padding_mask=self_attn_padding_mask,
                 need_attn=bool((idx == alignment_layer)),
                 need_head_weights=bool((idx == alignment_layer)),
+                dual_attn_mask=dual_attn_mask,
+                dual_attn_padding_mask=dual_attn_padding_mask,
             )
             inner_states.append(x)
             if layer_attn is not None and idx == alignment_layer:
@@ -539,22 +539,31 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         return min([self.max_target_positions] + 
             [self.embed_positions[task].max_positions for i, task in enumerate(self.subtasks)])
 
-    def buffered_future_mask(self, tuple_tensor):
+    def buffered_future_mask(self, tuple_tensor, dual_attn=False):
         dim = tuple([tuple_tensor[i].size(0) for i in range(len(self.subtasks))])
         # self._future_mask.device != tensor.device is not working in TorchScript. This is a workaround.
         _future_mask_tmp = [self._future_mask[i] for i in range(len(self.subtasks))]
-        for i in range(len(self.subtasks)):
-            if (
-                self._future_mask[i].size(0) == 0
-                or (not self._future_mask[i].device == tuple_tensor[i].device)
-                or self._future_mask[i].size(0) < dim[i]
-            ):
+        if not dual_attn:
+            for i in range(len(self.subtasks)):
+                if (
+                    self._future_mask[i].size(0) == 0
+                    or (not self._future_mask[i].device == tuple_tensor[i].device)
+                    or self._future_mask[i].size(0) < dim[i]
+                ):
+                    _future_mask_tmp[i] = torch.triu(
+                        utils.fill_with_neg_inf(torch.zeros([dim[i], dim[i]])), 1
+                    )
+                _future_mask_tmp[i] = _future_mask_tmp[i].to(tuple_tensor[i])
+            self._future_mask = tuple(_future_mask_tmp)
+            return tuple([self._future_mask[i][:dim[i], :dim[i]] for i in range(len(self.subtasks))])
+        else:
+            for i in range(len(self.subtasks)):
                 _future_mask_tmp[i] = torch.triu(
-                    utils.fill_with_neg_inf(torch.zeros([dim[i], dim[i]])), 1
+                    utils.fill_with_neg_inf(torch.zeros([dim[i], dim[1-i]])), 1
                 )
-            _future_mask_tmp[i] = _future_mask_tmp[i].to(tuple_tensor[i])
-        self._future_mask = tuple(_future_mask_tmp)
-        return tuple([self._future_mask[i][:dim[i], :dim[i]] for i in range(len(self.subtasks))])
+                _future_mask_tmp[i] = _future_mask_tmp[i].to(tuple_tensor[i])
+            self._future_mask_dual = tuple(_future_mask_tmp)
+            return tuple([self._future_mask_dual[i][:dim[i], :dim[1-i]] for i in range(len(self.subtasks))])
 
     def upgrade_state_dict_named(self, state_dict, name):
         """Upgrade a (possibly old) state dict for new versions of fairseq."""

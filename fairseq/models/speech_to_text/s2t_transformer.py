@@ -209,6 +209,14 @@ class S2TTransformerModel(FairseqEncoderDecoderModel):
             type=int,
             metavar="N",
             help="freeze encoder for first N updates",
+            "--use-linear-before-cnn",
+            action="store_true",
+            help="if True, add one linear layer before CNN.",
+        )
+        parser.add_argument(
+            "--no-cnn",
+            action="store_true",
+            help="if True, dont use CNN",
         )
 
     @classmethod
@@ -312,6 +320,9 @@ class S2TTransformerEncoder(FairseqEncoder):
 
         self.conv_version = args.conv_version
         if self.conv_version == "s2t_transformer":
+        self.use_linear_before_cnn = getattr(args, "use_linear_before_cnn", False)
+        self.no_cnn = getattr(args, "no_cnn", False)
+        if not self.use_linear_before_cnn:
             self.subsample = Conv1dSubsampler(
                 args.input_feat_per_channel * args.input_channels,
                 args.conv_channels,
@@ -324,6 +335,21 @@ class S2TTransformerEncoder(FairseqEncoder):
                 args.input_feat_per_channel,
                 args.conv_out_channels,
                 args.encoder_embed_dim,
+        else:
+            if self.no_cnn:
+                # self.in_linear =  nn.Sequential(
+                #     nn.Linear(args.input_feat_per_channel, 80),
+                #     nn.ReLU(),
+                #     nn.Linear(80, args.encoder_embed_dim),
+                # )
+                self.in_linear = nn.Linear(args.input_feat_per_channel, args.encoder_embed_dim)
+            else:
+                self.in_linear =  nn.Linear(args.input_feat_per_channel, 80)
+                self.subsample = Conv1dSubsampler(
+                80 * args.input_channels,
+                args.conv_channels,
+                args.encoder_embed_dim,
+                [int(k) for k in args.conv_kernel_sizes.split(",")],
             )
 
         self.embed_positions = PositionalEmbedding(
@@ -343,13 +369,22 @@ class S2TTransformerEncoder(FairseqEncoder):
             self.ctc_proj = nn.Linear(args.encoder_embed_dim, args.tgt_dict_size)
 
     def _forward(self, src_tokens, src_lengths, return_all_hiddens=False):
-        x, input_lengths = self.subsample(src_tokens, src_lengths)
-        x = self.embed_scale * x
-        embed_src_tokens = x
+        if not self.use_linear_before_cnn:
+            x, input_lengths = self.subsample(src_tokens, src_lengths)
+            x = self.embed_scale * x
 
-        encoder_padding_mask = lengths_to_padding_mask(input_lengths)
-        positions = self.embed_positions(encoder_padding_mask).transpose(0, 1)
-        x += positions
+            encoder_padding_mask = lengths_to_padding_mask(input_lengths)
+            positions = self.embed_positions(encoder_padding_mask).transpose(0, 1)
+            x += positions
+        else:
+            x = self.in_linear(src_tokens)
+            if self.no_cnn:   
+                x = x.transpose(0, 1).contiguous()
+                input_lengths = torch.LongTensor([x[:,i].shape[0] for i in range(x.shape[1])]).to(x.device)
+            else:
+                x, input_lengths = self.subsample(x, src_lengths)
+                x = self.embed_scale * x
+            encoder_padding_mask = lengths_to_padding_mask(input_lengths)
         x = self.dropout_module(x)
 
         encoder_states = []

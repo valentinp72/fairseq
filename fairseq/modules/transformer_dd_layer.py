@@ -43,9 +43,10 @@ class TransformerDualDecoderLayer(nn.Module):
         self.embed_dim = args.decoder_embed_dim
 
         # arguments for "Dual-decoder Transformer for Joint ASR and Multilingual ST"
-        self.merge_operator = getattr(args, "dd_merge_operator", None)
+        self.merge_operator = getattr(args, "merge_operator", None)
         self.dual_attn_position = getattr(args, "dual_attn_position", None)
         self.subtasks = getattr(args, "subtasks", None)
+        merge_sum_weight_init = getattr(args, "merge_sum_weight_init", 0.0)
 
         self.dropout_module = nn.ModuleDict({k: FairseqDropout(
             args.dropout, module_name=self.__class__.__name__
@@ -73,11 +74,19 @@ class TransformerDualDecoderLayer(nn.Module):
 
         if self.merge_operator is not None:
             if self.merge_operator == "sum":
-                self.merge_weight = nn.ModuleDict({k: torch.nn.Parameter(
-                    torch.tensor(0.3)) for k in self.subtasks})
+                if "self" in self.dual_attn_position:
+                    self.merge_sum_weight_self = nn.ParameterDict({k: torch.nn.Parameter(
+                        torch.tensor(merge_sum_weight_init)) for k in self.subtasks})
+                if "source" in self.dual_attn_position:
+                    self.merge_sum_weight_source = nn.ParameterDict({k: torch.nn.Parameter(
+                    torch.tensor(merge_sum_weight_init)) for k in self.subtasks})
             elif self.merge_operator == "concat":
-                self.merge_concat_layer = nn.ModuleDict({k: nn.Linear(
-                    self.embed_dim*2, self.embed_dim)} for k in self.subtasks)
+                if "self" in self.dual_attn_position:
+                    self.merge_concat_self = nn.ModuleDict({k: nn.Linear(
+                        self.embed_dim*2, self.embed_dim) for k in self.subtasks})
+                if "source" in self.dual_attn_position:
+                    self.merge_concat_source = nn.ModuleDict({k: nn.Linear(
+                        self.embed_dim*2, self.embed_dim) for k in self.subtasks})
 
         self.activation_fn = utils.get_activation_fn(
             activation=str(args.activation_fn)
@@ -209,8 +218,10 @@ class TransformerDualDecoderLayer(nn.Module):
             need_attn = True
 
         residual = x
+        y = x
         if self.normalize_before:
             x = tuple([self.self_attn_layer_norm[task](x[i]) for i, task in enumerate(self.subtasks)])
+            y = x
         if prev_self_attn_state is not None: # TODO: to revise for dual-decoder Transformer
             prev_key, prev_value = prev_self_attn_state[:2]
             saved_state: Dict[str, Optional[Tensor]] = {
@@ -244,8 +255,6 @@ class TransformerDualDecoderLayer(nn.Module):
                     (encoder_padding_mask[i], self_attn_padding_mask[i]), dim=1
                 ) for i in range(len(self.subtasks))])
             assert encoder_out is not None
-            logging.info(f'encoder_padding_mask: {encoder_padding_mask}')
-            logging.info(f'self_attn_padding_mask: {self_attn_padding_mask}')
             y = torch.cat((encoder_out, x), dim=0)
         else:
             y = x
@@ -263,6 +272,27 @@ class TransformerDualDecoderLayer(nn.Module):
             )
         x, attn = tuple(x_tmp), tuple(attn_tmp)
     
+        # Dual-attention layer at self
+        if self.dual_attn_at_self is not None:
+            x_tmp, attn_tmp = [None] * len(self.subtasks), [None] * len(self.subtasks)
+            for i, task in enumerate(self.subtasks):
+                z, _ = self.dual_attn_at_self[task](
+                    query=y[i],
+                    key=y[1-i],
+                    value=y[1-i],
+                    key_padding_mask=dual_attn_padding_mask[i],
+                    incremental_state=incremental_state,
+                    need_weights=False,
+                    attn_mask=dual_attn_mask[i],
+                )
+                if self.merge_operator == "sum":
+                    x_tmp[i] = x[i] + self.merge_sum_weight_self[task] * z
+                elif self.merge_operator == "concat":
+                    x_tmp[i] = self.merge_concat_self[task](torch.cat((x[i], z), dim=-1))
+                else:
+                    raise NotImplementedError
+            x = tuple(x_tmp)
+    
         x = tuple([self.dropout_module[task](x[i]) for i, task in enumerate(self.subtasks)])
         x = tuple([self.residual_connection(x[i], residual[i]) for i, task in enumerate(self.subtasks)])
         if not self.normalize_before:
@@ -270,8 +300,10 @@ class TransformerDualDecoderLayer(nn.Module):
 
         if self.encoder_attn is not None and encoder_out is not None:
             residual = x
+            y = x
             if self.normalize_before:
                 x = tuple([self.encoder_attn_layer_norm[task](x[i]) for i, task in enumerate(self.subtasks)])
+                y = x
             if prev_attn_state is not None:
                 prev_key, prev_value = prev_attn_state[:2]
                 saved_state: Dict[str, Optional[Tensor]] = {
@@ -298,6 +330,28 @@ class TransformerDualDecoderLayer(nn.Module):
                     need_head_weights=need_head_weights,
                 )
             x , attn = tuple(x_tmp), tuple(attn_tmp)
+
+            # Dual-attention layer at encoder-decoder attention (called source attention)
+            if self.dual_attn_at_src is not None:
+                x_tmp, attn_tmp = [None] * len(self.subtasks), [None] * len(self.subtasks)
+                for i, task in enumerate(self.subtasks):
+                    z, _ = self.dual_attn_at_src[task](
+                        query=y[i],
+                        key=y[1-i],
+                        value=y[1-i],
+                        key_padding_mask=dual_attn_padding_mask[i],
+                        incremental_state=incremental_state,
+                        need_weights=False,
+                        attn_mask=dual_attn_mask[i],
+                    )
+                    if self.merge_operator == "sum":
+                        x_tmp[i] = x[i] + self.merge_sum_weight_source[task] * z
+                    elif self.merge_operator == "concat":
+                        x_tmp[i] = self.merge_concat_source[task](torch.cat((x[i], z), dim=-1))
+                    else:
+                        raise NotImplementedError
+                x = tuple(x_tmp)
+
             x = tuple([self.dropout_module[task](x[i]) for i, task in enumerate(self.subtasks)])
             x = tuple([self.residual_connection(x[i], residual[i]) for i, task in enumerate(self.subtasks)])
             if not self.normalize_before:
@@ -325,9 +379,7 @@ class TransformerDualDecoderLayer(nn.Module):
                 ]
             else:
                 self_attn_state = [saved_state["prev_key"], saved_state["prev_value"]]
-            # logging.info(f'x: ({x[0].size()}, {x[1].size()})')
-            # logging.info(f'attn: ({attn[0].size()}, {attn[1].size()})')
-            # logging.info(f'self_attn_state={self_attn_state}')
+
             return x, attn, self_attn_state
 
         return x, attn, None
