@@ -6,6 +6,7 @@
 import math
 
 from typing import List, Optional
+import logging
 
 import torch
 import torch.nn as nn
@@ -890,3 +891,213 @@ class DiverseSiblingsSearch(Search):
             final_indices[i] = indices[i][final_indices[i]]
 
         return final_scores, final_indices, final_beams
+
+class DualBeamSearch(Search):
+    def __init__(self, tgt_dict):
+        super().__init__(tgt_dict)
+        self.constraint_states = None
+
+    @torch.jit.export
+    def step(
+        self,
+        step: int,
+        lprobs,
+        scores: Optional[Tensor],
+        prev_output_tokens: Optional[Tensor] = None,
+        original_batch_idxs: Optional[Tensor] = None,
+    ):
+        bsz, beam_size, vocab_size = lprobs[0].size()
+
+        if step == 0:
+            # at the first step all hypotheses are equally likely, so use
+            # only the first beam
+            for i in range(2):
+                lprobs[i] = lprobs[i][:, ::beam_size, :].contiguous()
+        else:
+            # make probs contain cumulative scores for each hypothesis
+            assert scores is not None
+            for i in range(2):
+                lprobs[i] = lprobs[i] + scores[i][:, :, step - 1].unsqueeze(-1)
+
+        top_prediction = [torch.topk(
+            lprobs[i].view(bsz, -1),
+            k=min(
+                # Take the best 2 x beam_size predictions. We'll choose the first
+                # beam_size of these which don't predict eos to continue with.
+                beam_size * 2,
+                lprobs[i].view(bsz, -1).size(1) - 1,  # -1 so we never select pad
+            ),
+        ) for i in range(2)]
+        scores_buf = [top_prediction[i][0] for i in range(2)]
+        indices_buf = [top_prediction[i][1] for i in range(2)]
+        # Project back into relative indices and beams
+        beams_buf = [indices_buf[i] // vocab_size for i in range(2)]
+        indices_buf = [indices_buf[i].fmod(vocab_size) for i in range(2)]
+
+        # At this point, beams_buf and indices_buf are single-dim and contain relative indices
+        return scores_buf, indices_buf, beams_buf
+
+    # @torch.jit.export
+    # def step_new(
+    #     self,
+    #     step: int,
+    #     lprobs,
+    #     scores: Optional[Tensor],
+    #     prev_output_tokens: Optional[Tensor] = None,
+    #     original_batch_idxs: Optional[Tensor] = None,):
+    #     bsz, beam_size, vocab_size = lprobs[0].size()
+
+    #     if step == 0:
+    #         # at the first step all hypotheses are equally likely, so use
+    #         # only the first beam
+    #         for i in range(2):
+    #             lprobs[i] = lprobs[i][:, ::beam_size, :].contiguous()
+    #     else:
+    #         # make probs contain cumulative scores for each hypothesis
+    #         assert scores is not None
+    #         for i in range(2):
+    #             lprobs[i] = lprobs[i] + scores[i][:, :, step - 1].unsqueeze(-1)
+
+    #     top_prediction = [torch.topk(
+    #         lprobs[i].view(bsz, beam_size*2, -1),
+    #         k=min(
+    #             # Take the best 2 x beam_size predictions. We'll choose the first
+    #             # beam_size of these which don't predict eos to continue with.
+    #             beam_size * 2,
+    #             vocab_size - 1,  # -1 so we never select pad
+    #         ),
+    #     ) for i in range(2)]
+
+    #     logging.info(f'top_prediction[0]: {top_prediction[0]}')
+    #     logging.info(f'top_prediction[1]: {top_prediction[1]}')
+    #     xk, ixk = top_prediction[0]
+    #     yk, iyk = top_prediction[1]
+    #     # ixk_B = ixk // vocab_size
+    #     # ixk_V = ixk.fmod(vocab_size)
+    #     # iyk_B = iyk // vocab_size
+    #     # iyk_V = iyk.fmod(vocab_size)
+    #     # S = (torch.mm(torch.t(xk), torch.ones_like(xk))
+    #     #                         + torch.mm(torch.t(torch.ones_like(yk)), yk))
+    #     B = beam_size*2
+    #     M = bsz*B
+    #     xk = xk.view(M, -1)
+    #     yk = yk.view(M, -1)
+    #     ixk = ixk.view(M, -1)
+    #     iyk = iyk.view(M, -1)
+
+    #     scores = (torch.matmul(xk.unsqueeze(-1), torch.ones_like(xk).unsqueeze(1))
+    #             + torch.matmul(torch.ones_like(yk).unsqueeze(-1), yk.unsqueeze(-1).transpose(1,2))) # M x B x B
+
+    #     s2v = torch.LongTensor([[[i, j] for b in range(M) for i in ixk[b] for j in iyk[b]]])
+    #     s2v = s2v.to(scores.device)
+    #     s2v = s2v.reshape(M, B, 2)
+    #     logging.info(f'scores: {scores.shape}')
+    #     logging.info(f's2v: {s2v.shape}')
+
+    #     scores, inds = torch.topk(scores.view(M, -1), k=B)
+    #     logging.info(f'scores: {scores.shape}')
+    #     logging.info(f'inds: {inds.shape}\n{inds}')
+    #     I = s2v.reshape(bsz, -1, 2)
+    #     J = [None]*bsz
+    #     logging.info(f'I: {I.shape}')
+    #     # logging.info(f'J: {J.shape}')
+    #     for b in range(bsz):
+    #         logging.info(f'inds[{b}]:\n{inds[b]}')
+    #         J[b] = I[b][inds[b]]
+    #     J = torch.stack(J)
+    #     logging.info(f'J: {J.shape}')
+    #     local_best_ids_asr = J[:,:,0]
+    #     local_best_ids_st = J[:,:,1]
+    #     logging.info(f'local_best_ids_asr: {local_best_ids_asr.shape}\n{local_best_ids_asr}')
+    #     logging.info(f'local_best_ids_st: {local_best_ids_st.shape}\n{local_best_ids_st}')
+
+    #     scores_buf = [scores, scores]
+    #     # scores_buf = [top_prediction[i][0] for i in range(2)]
+    #     indices_buf = [local_best_ids_asr, local_best_ids_st]
+    #     # Project back into relative indices and beams
+    #     beams_buf = [indices_buf[i] // vocab_size for i in range(2)]
+    #     indices_buf = [indices_buf[i].fmod(vocab_size) for i in range(2)]
+
+    #     # At this point, beams_buf and indices_buf are single-dim and contain relative indices
+    #     return scores_buf, indices_buf, beams_buf
+
+
+    # @torch.jit.export
+    # def step(
+    #     self,
+    #     step: int,
+    #     lprobs,
+    #     scores: Optional[Tensor],
+    #     prev_output_tokens: Optional[Tensor] = None,
+    #     original_batch_idxs: Optional[Tensor] = None):
+    #     bsz, beam_size, vocab_size = lprobs[0].size()
+
+    #     if step == 0:
+    #         # at the first step all hypotheses are equally likely, so use
+    #         # only the first beam
+    #         for i in range(2):
+    #             lprobs[i] = lprobs[i][:, ::beam_size, :].contiguous()
+    #     else:
+    #         # make probs contain cumulative scores for each hypothesis
+    #         assert scores is not None
+    #         for i in range(2):
+    #             lprobs[i] = lprobs[i] + scores[i][:, :, step - 1].unsqueeze(-1)
+
+    #     B = beam_size * 2
+    #     top_prediction = [torch.topk(
+    #         lprobs[i].view(bsz, -1),
+    #         k=min(
+    #             # Take the best 2 x beam_size predictions. We'll choose the first
+    #             # beam_size of these which don't predict eos to continue with.
+    #             B,
+    #             lprobs[i].view(bsz, -1).size(1) - 1,  # -1 so we never select pad
+    #         ),
+    #     ) for i in range(2)]
+
+    #     logging.info(f'top_prediction[0]: {top_prediction[0]}')
+    #     logging.info(f'top_prediction[1]: {top_prediction[1]}')
+    #     # xk: N x B
+    #     xk, ixk = top_prediction[0]
+    #     yk, iyk = top_prediction[1]
+    #     # ixk_B = ixk // vocab_size
+    #     # ixk_V = ixk.fmod(vocab_size)
+    #     # iyk_B = iyk // vocab_size
+    #     # iyk_V = iyk.fmod(vocab_size)
+    #     # S = (torch.mm(torch.t(xk), torch.ones_like(xk))
+    #     #                         + torch.mm(torch.t(torch.ones_like(yk)), yk))
+    #     scores = (torch.matmul(xk.unsqueeze(-1), torch.ones_like(xk).unsqueeze(1))
+    #             + torch.matmul(torch.ones_like(yk).unsqueeze(-1), yk.unsqueeze(-1).transpose(1,2))) # bsz x B x B
+    #     # s2v = torch.LongTensor([[i, j] for i in ixk.squeeze(0) for j in iyk.squeeze(0)]) # (k^2) x 2
+    #     # s2v = torch.LongTensor([[ii, jj] for (i, j) in zip(ixk, iyk) for ii in i for jj in j])
+    #     s2v = torch.LongTensor([[[i, j] for b in range(bsz) for i in ixk_V[b] for j in iyk_V[b]]]])
+    #     s2v = s2v.to(scores.device)
+    #     s2v = s2v.reshape(bsz, beam_size*2, beam_size*2, 2)
+    #     logging.info(f'scores: {scores.shape}')
+    #     logging.info(f's2v: {s2v.shape}')
+
+    #     scores, inds = torch.topk(scores.view(bsz, -1), k=beam_size * 2)
+    #     logging.info(f'scores: {scores.shape}')
+    #     logging.info(f'inds: {inds.shape}\n{inds}')
+    #     I = s2v.reshape(bsz, -1, 2)
+    #     J = [None]*bsz
+    #     logging.info(f'I: {I.shape}')
+    #     # logging.info(f'J: {J.shape}')
+    #     for b in range(bsz):
+    #         logging.info(f'inds[{b}]:\n{inds[b]}')
+    #         J[b] = I[b][inds[b]]
+    #     J = torch.stack(J)
+    #     logging.info(f'J: {J.shape}')
+    #     local_best_ids_asr = J[:,:,0]
+    #     local_best_ids_st = J[:,:,1]
+    #     logging.info(f'local_best_ids_asr: {local_best_ids_asr.shape}\n{local_best_ids_asr}')
+    #     logging.info(f'local_best_ids_st: {local_best_ids_st.shape}\n{local_best_ids_st}')
+
+    #     scores_buf = [scores, scores]
+    #     # scores_buf = [top_prediction[i][0] for i in range(2)]
+    #     indices_buf = [local_best_ids_asr, local_best_ids_st]
+    #     # Project back into relative indices and beams
+    #     beams_buf = [indices_buf[i] // vocab_size for i in range(2)]
+    #     indices_buf = [indices_buf[i].fmod(vocab_size) for i in range(2)]
+
+    #     # At this point, beams_buf and indices_buf are single-dim and contain relative indices
+    #     return scores_buf, indices_buf, beams_buf

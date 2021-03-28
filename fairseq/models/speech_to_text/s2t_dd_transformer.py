@@ -82,7 +82,8 @@ class S2TDualDecoderTransformerModel(FairseqEncoderDecoderModel):
 
         # get names of subtasks
         args.subtasks = getattr(args, "subtasks", None)
-        args.subtasks = args.subtasks.split("_") if args.subtasks is not None else None
+        if not isinstance(args.subtasks, list):
+            args.subtasks = args.subtasks.split("_") if args.subtasks is not None else None
 
         def build_embedding(dictionary, embed_dim):
             num_embeddings = len(dictionary)

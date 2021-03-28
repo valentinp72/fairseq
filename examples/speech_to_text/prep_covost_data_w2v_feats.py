@@ -121,6 +121,7 @@ class CoVoST(Dataset):
         w2v_path: str = None,
         gpu: int = 0,
         normalize_signal: bool = False,
+        w2v_version: int = 2,
     ) -> None:
         assert version in self.VERSIONS and split in self.SPLITS
         assert source_language is not None
@@ -129,6 +130,7 @@ class CoVoST(Dataset):
         self.folder_name = "clips"
         self.gpu = torch.cuda.current_device()
         self.normalize_signal = normalize_signal
+        self.w2v_version = w2v_version
         print(f'*** normalize_signal: {normalize_signal} ***')
         if self.use_w2v_feats:
             assert os.path.isfile(w2v_path), f"{w2v_path} does not exist."
@@ -208,8 +210,13 @@ class CoVoST(Dataset):
             with torch.no_grad():
                 if self.normalize_signal:
                     wav = F.layer_norm(wav, wav.shape)
-                feats = self.w2v_model(wav, mask=False, features_only=True)["x"] # 1 x T x D_w2v
-                feats = feats.squeeze().cpu().detach().numpy()
+                if self.w2v_version == 2:
+                    feats = self.w2v_model(wav, mask=False, features_only=True)["x"] # 1 x T x D_w2v
+                elif self.w2v_version == 1:
+                    feats = self.w2v_model.feature_extractor(wav)
+                    feats = self.w2v_model.feature_aggregator(feats) # 1 x D_w2v x T
+                    feats = feats.transpose(1,2) 
+                feats = feats.squeeze().cpu().detach().numpy() # T x D_w2v
         sentence = data["sentence"]
         translation = None if self.no_translation else data["translation"]
         speaker_id = data["client_id"]
@@ -234,7 +241,9 @@ def process(args):
                         use_w2v_feats=args.use_w2v_feats,
                         w2v_path=args.w2v_path,
                         gpu=args.gpu,
-                        normalize_signal=args.normalize_signal)
+                        normalize_signal=args.normalize_signal,
+                        w2v_version=args.w2v_version,
+                        )
         print("Extracting log mel filter bank or wav2vec features...")
         if not args.use_w2v_feats:
             for waveform, _, sample_rate, _, _, _, utt_id in tqdm(dataset):
@@ -263,7 +272,9 @@ def process(args):
                         use_w2v_feats=args.use_w2v_feats,
                         w2v_path=args.w2v_path,
                         gpu=args.gpu,
-                        normalize_signal=args.normalize_signal)
+                        normalize_signal=args.normalize_signal,
+                        w2v_version=args.w2v_version,
+                        )
         for wav, feats, sr, src_utt, tgt_utt, speaker_id, utt_id in tqdm(dataset):
             manifest["id"].append(utt_id)
             manifest["audio"].append(zip_manifest[utt_id])
@@ -317,6 +328,7 @@ def main():
     parser.add_argument("--src-lang", "-s", required=True, type=str)
     parser.add_argument("--tgt-lang", "-t", type=str)
     parser.add_argument("--use-w2v-feats", action="store_true")
+    parser.add_argument("--w2v-version", type=int, default=2)
     parser.add_argument("--normalize-signal", action="store_true")
     parser.add_argument("--w2v-path", type=str)
     parser.add_argument("--gpu", type=int, default=0)

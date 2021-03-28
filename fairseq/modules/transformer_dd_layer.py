@@ -194,10 +194,10 @@ class TransformerDualDecoderLayer(nn.Module):
         incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
         prev_self_attn_state: Optional[List[torch.Tensor]] = None,
         prev_attn_state: Optional[List[torch.Tensor]] = None,
-        self_attn_mask: Optional[Tuple[torch.Tensor]] = None,
-        self_attn_padding_mask: Optional[Tuple[torch.Tensor]] = None,
-        dual_attn_mask: Optional[Tuple[torch.Tensor]] = None,
-        dual_attn_padding_mask: Optional[Tuple[torch.Tensor]] = None,
+        self_attn_mask: Optional[Tuple[torch.Tensor]] = (None, None),
+        self_attn_padding_mask: Optional[Tuple[torch.Tensor]] = (None, None),
+        dual_attn_mask: Optional[Tuple[torch.Tensor]] = (None, None),
+        dual_attn_padding_mask: Optional[Tuple[torch.Tensor]] = (None, None),
         need_attn: bool = False,
         need_head_weights: bool = False,
     ):
@@ -240,12 +240,12 @@ class TransformerDualDecoderLayer(nn.Module):
             and _self_attn_input_buffer is not None
             and "prev_key" in _self_attn_input_buffer
         ):
-            if self_attn_mask is not None:
+            if self_attn_mask != (None, None):
                 assert encoder_out is not None
                 self_attn_mask = tuple([torch.cat(
                     (x[i].new_zeros(x[i].size(0), encoder_out.size(0)), self_attn_mask[i]), dim=1
                 ) for i in range(len(self.subtasks))])
-            if self_attn_padding_mask is not None:
+            if self_attn_padding_mask != (None, None):
                 if encoder_padding_mask is None:
                     assert encoder_out is not None
                     encoder_padding_mask = tuple([self_attn_padding_mask[i].new_zeros(

@@ -415,6 +415,14 @@ class FairseqTask(object):
             SequenceGenerator,
             SequenceGeneratorWithAlignment,
         )
+        try:
+            from fairseq.fb_sequence_generator import FBSequenceGenerator
+        except ModuleNotFoundError:
+            pass
+        try:
+            from fairseq.sequence_generator_dd import SequenceGeneratorDD
+        except ModuleNotFoundError:
+            pass
 
         # Choose search strategy. Defaults to Beam Search.
         sampling = getattr(args, "sampling", False)
@@ -482,6 +490,10 @@ class FairseqTask(object):
             if getattr(args, "print_alignment", False):
                 seq_gen_cls = SequenceGeneratorWithAlignment
                 extra_gen_cls_kwargs["print_alignment"] = args.print_alignment
+            elif getattr(args, "fb_seq_gen", False):
+                seq_gen_cls = FBSequenceGenerator
+            elif getattr(args, "single_joint_beam", False):
+                seq_gen_cls = SequenceGeneratorDD
             else:
                 seq_gen_cls = SequenceGenerator
 

@@ -1039,6 +1039,9 @@ class GenerationConfig(FairseqDataclass):
     eos_token: Optional[str] = field(
         default=None,
         metadata={"help": "EOS token"},
+    single_joint_beam: bool = field(
+        default=False, 
+        metadata={"help": "Single joint beam strategy used in dual-decoder Transformer"},
     )
 
 

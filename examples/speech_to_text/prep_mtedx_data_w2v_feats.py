@@ -49,10 +49,9 @@ class mTEDx(Dataset):
     """
 
     SPLITS    = ["train", "valid", "test"] #, "iwslt2021"]
-    # LANGPAIRS = ["es-es","fr-fr","pt-pt","it-it","ru-ru","el-el","ar-ar","de-de",
-    #              "es-en","es-fr","es-pt","es-it","fr-en","fr-es","fr-pt",
-    #              "pt-en","pt-es","it-en","it-es","ru-en","el-en"]
-    LANGPAIRS = ["fr-en"]
+    LANGPAIRS = ["es-es","fr-fr","pt-pt","it-it","ru-ru","el-el","ar-ar","de-de",
+                 "es-en","es-fr","es-pt","es-it","fr-en","fr-es","fr-pt",
+                 "pt-en","pt-es","it-en","it-es","ru-en","el-en"]
 
 
     def __init__(self, root: str, lang: str, split: str,
@@ -117,7 +116,7 @@ class mTEDx(Dataset):
 
     def __getitem__(self, n: int) -> Tuple[Tensor, int, str, str, str, str, str]:
         wav_path, offset, n_frames, sr, src_utt, tgt_utt, spk_id, tgt_lang, utt_id = self.data[n]
-        waveform, _ = get_waveform(wav_path, frames=n_frames, start=offset)
+        waveform, _ = get_waveform(wav_path, frames=n_frames, start=offset) # 1 x T
         waveform = torch.from_numpy(waveform)
         feats = None
         if self.use_w2v_feats:
@@ -126,7 +125,7 @@ class mTEDx(Dataset):
                 if self.normalize_signal:
                     waveform = F.layer_norm(waveform, waveform.shape)
                 feats = self.w2v_model(waveform, mask=False, features_only=True)["x"] # 1 x T x D_w2v
-                feats = feats.squeeze().cpu().numpy()
+                feats = feats.squeeze(0).cpu().numpy()
         return waveform, feats, sr, src_utt, tgt_utt, spk_id, tgt_lang, utt_id
 
     def __len__(self) -> int:
