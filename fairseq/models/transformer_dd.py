@@ -29,6 +29,7 @@ from fairseq.modules import (
 )
 from fairseq.modules.checkpoint_activations import checkpoint_wrapper
 from fairseq.modules.quant_noise import quant_noise as apply_quant_noise_
+from fairseq.data.audio.speech_to_text_dataset import SpeechToTextDataset
 from torch import Tensor
 
 
@@ -211,6 +212,12 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         self.merge_operator = getattr(args, "merge_operator", None)
         self.wait_k_asr = getattr(args, "wait_k_asr", 0)
         self.wait_k_st = getattr(args, "wait_k_st", 0)
+        self.dual_lang_pairs = getattr(args, "dual_lang_pairs", None)
+        self.lang_token_ids = {
+            i: s
+            for s, i in dictionary.indices.items() if SpeechToTextDataset.is_lang_tag(s)
+        }
+        logging.info(f'lang_token_ids: {self.lang_token_ids}')
 
         self.dropout_module = nn.ModuleDict({k: FairseqDropout(
             args.dropout, module_name=self.__class__.__name__
@@ -411,8 +418,18 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
                 - the decoder's features of shape `(batch, tgt_len, embed_dim)`
                 - a dictionary with any model-specific outputs
         """
+        ntask = len(self.subtasks)
         if alignment_layer is None:
             alignment_layer = self.num_layers - 1
+        
+        dual_attn_names = self.subtasks
+        if self.dual_lang_pairs is not None:
+            src_lang_id = prev_output_tokens[0][:, 1:2][0].item()
+            tgt_lang_id = prev_output_tokens[1][:, 1:2][0].item()
+            src_lang_key = f'{self.subtasks[0]}_{self.lang_token_ids[src_lang_id]}'
+            tgt_lang_key = f'{self.subtasks[1]}_{self.lang_token_ids[tgt_lang_id]}'
+            dual_attn_names = [src_lang_key, tgt_lang_key]
+            # logging.info(f'dual_attn_names: {dual_attn_names}')
 
         # embed positions
         positions = tuple(
@@ -421,9 +438,9 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
                 for i, task in enumerate(self.subtasks)]) if self.embed_positions is not None else None
 
         if incremental_state != (None, None):
-            prev_output_tokens = tuple([prev_output_tokens[i][:, -1:] for i in range(len(self.subtasks))])
+            prev_output_tokens = tuple([prev_output_tokens[i][:, -1:] for i in range(ntask)])
             if positions is not None:
-                positions = tuple([positions[i][:, -1:] for i in range(len(self.subtasks))])
+                positions = tuple([positions[i][:, -1:] for i in range(ntask)])
 
         # embed tokens and positions
         x = tuple([self.embed_scale * self.embed_tokens[task](prev_output_tokens[i]) for i, task in enumerate(self.subtasks)])
@@ -435,8 +452,8 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
             x = tuple([self.project_in_dim[task](x[i]) for i, task in enumerate(self.subtasks)])
 
         if positions is not None:
-            x_tmp = [None] * len(self.subtasks)
-            for i in range(len(self.subtasks)):
+            x_tmp = [None] * ntask
+            for i in range(ntask):
                 x_tmp[i] = x[i] + positions[i]
             x = tuple(x_tmp)
 
@@ -446,8 +463,8 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         x = tuple([self.dropout_module[task](x[i]) for i, task in enumerate(self.subtasks)])
 
         # B x T x C -> T x B x C
-        x_tmp = [None] * len(self.subtasks)
-        for i in range(len(self.subtasks)):
+        x_tmp = [None] * ntask
+        for i in range(ntask):
             x_tmp[i] = x[i].transpose(0, 1)
         x = tuple(x_tmp)
 
@@ -455,8 +472,8 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         dual_attn_padding_mask: Optional[List[Tensor]] = [None, None]
         if self.cross_self_attention or \
             any([prev_output_tokens[i].eq(self.padding_idx).any() \
-                for i in range(len(self.subtasks))]):
-            for i in range(len(self.subtasks)):
+                for i in range(ntask)]):
+            for i in range(ntask):
                 self_attn_padding_mask[i] = prev_output_tokens[i].eq(self.padding_idx)
                 dual_attn_padding_mask[i] = prev_output_tokens[1-i].eq(self.padding_idx)
 
@@ -489,24 +506,25 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
                 need_head_weights=bool((idx == alignment_layer)),
                 dual_attn_mask=dual_attn_mask,
                 dual_attn_padding_mask=dual_attn_padding_mask,
+                dual_attn_names=dual_attn_names,
             )
             inner_states.append(x)
             if layer_attn is not None and idx == alignment_layer:
-                attn_tmp = [None] * len(self.subtasks)
-                for i in range(len(self.subtasks)):
+                attn_tmp = [None] * ntask
+                for i in range(ntask):
                     attn_tmp[i] = layer_attn[i].float().to(x[i])
                 attn = tuple(attn_tmp)
 
         if attn is not None:
             if alignment_heads is not None:
-                attn_tmp = [None] * len(self.subtasks)
-                for i in range(len(self.subtasks)):
+                attn_tmp = [None] * ntask
+                for i in range(ntask):
                     attn_tmp[i] = attn[i][:alignment_heads]
                 attn = tuple(attn_tmp)
 
             # average probabilities over heads
-            attn_tmp = [None] * len(self.subtasks)
-            for i in range(len(self.subtasks)):
+            attn_tmp = [None] * ntask
+            for i in range(ntask):
                 attn_tmp[i] = attn[i].mean(dim=0)
             attn = tuple(attn_tmp)
 
@@ -514,8 +532,8 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
             x = tuple([self.layer_norm[task](x[i]) for i, task in enumerate(self.subtasks)])
 
         # T x B x C -> B x T x C
-        x_tmp = [None] * len(self.subtasks)
-        for i in range(len(self.subtasks)):
+        x_tmp = [None] * ntask
+        for i in range(ntask):
             x_tmp[i] = x[i].transpose(0, 1)
         x = tuple(x_tmp)
 
@@ -540,11 +558,12 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
             [self.embed_positions[task].max_positions for i, task in enumerate(self.subtasks)])
 
     def buffered_future_mask(self, tuple_tensor, dual_attn=False):
-        dim = tuple([tuple_tensor[i].size(0) for i in range(len(self.subtasks))])
+        ntask = len(self.subtasks)
+        dim = tuple([tuple_tensor[i].size(0) for i in range(ntask)])
         # self._future_mask.device != tensor.device is not working in TorchScript. This is a workaround.
-        _future_mask_tmp = [self._future_mask[i] for i in range(len(self.subtasks))]
+        _future_mask_tmp = [self._future_mask[i] for i in range(ntask)]
         if not dual_attn:
-            for i in range(len(self.subtasks)):
+            for i in range(ntask):
                 if (
                     self._future_mask[i].size(0) == 0
                     or (not self._future_mask[i].device == tuple_tensor[i].device)
@@ -555,15 +574,15 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
                     )
                 _future_mask_tmp[i] = _future_mask_tmp[i].to(tuple_tensor[i])
             self._future_mask = tuple(_future_mask_tmp)
-            return tuple([self._future_mask[i][:dim[i], :dim[i]] for i in range(len(self.subtasks))])
+            return tuple([self._future_mask[i][:dim[i], :dim[i]] for i in range(ntask)])
         else:
-            for i in range(len(self.subtasks)):
+            for i in range(ntask):
                 _future_mask_tmp[i] = torch.triu(
                     utils.fill_with_neg_inf(torch.zeros([dim[i], dim[1-i]])), 1
                 )
                 _future_mask_tmp[i] = _future_mask_tmp[i].to(tuple_tensor[i])
             self._future_mask_dual = tuple(_future_mask_tmp)
-            return tuple([self._future_mask_dual[i][:dim[i], :dim[1-i]] for i in range(len(self.subtasks))])
+            return tuple([self._future_mask_dual[i][:dim[i], :dim[1-i]] for i in range(ntask)])
 
     def upgrade_state_dict_named(self, state_dict, name):
         """Upgrade a (possibly old) state dict for new versions of fairseq."""

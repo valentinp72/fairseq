@@ -47,6 +47,19 @@ class TransformerDualDecoderLayer(nn.Module):
         self.dual_attn_position = getattr(args, "dual_attn_position", None)
         self.subtasks = getattr(args, "subtasks", None)
         merge_sum_weight_init = getattr(args, "merge_sum_weight_init", 0.0)
+        self.dual_attn_lang = getattr(args, "dual_attn_lang", False)
+        dual_lang_pairs = getattr(args, "dual_lang_pairs", None)
+        self.shared_dual_attn = True if not self.dual_attn_lang else False
+        if dual_lang_pairs is not None:
+            dual_lang_pairs = dual_lang_pairs.split(",")
+            src_keys = [f'{self.subtasks[0]}_<lang:{p.split("-")[0]}>' for p in dual_lang_pairs]
+            tgt_keys = [f'{self.subtasks[1]}_<lang:{p.split("-")[1]}>' for p in dual_lang_pairs]
+            self.dual_attn_names = src_keys + tgt_keys
+        else: # for backward compatibility
+            self.dual_attn_names = self.subtasks
+            self.shared_dual_attn = False
+        logging.info(f'self.dual_attn_names: {self.dual_attn_names}')
+        logging.info(f'self.shared_dual_attn: {self.shared_dual_attn}')
 
         self.dropout_module = nn.ModuleDict({k: FairseqDropout(
             args.dropout, module_name=self.__class__.__name__
@@ -66,27 +79,39 @@ class TransformerDualDecoderLayer(nn.Module):
         self.dual_attn_at_self, self.dual_attn_at_src = None, None
         if self.dual_attn_position is not None:
             if "self" in self.dual_attn_position:
-                self.dual_attn_at_self = nn.ModuleDict({k: self.build_dual_attention(
-                    self.embed_dim, args) for k in self.subtasks})
+                # self.dual_attn_at_self = nn.ModuleDict({k: self.build_dual_attention(
+                #     self.embed_dim, args) for k in self.subtasks})
+                self.dual_attn_at_self = self.build_dual_attention(
+                    self.dual_attn_names,
+                    self.embed_dim,
+                    args,
+                    shared=self.shared_dual_attn,
+                )
             if "source" in self.dual_attn_position:
-                self.dual_attn_at_src = nn.ModuleDict({k: self.build_dual_attention(
-                    self.embed_dim, args) for k in self.subtasks})
+                # self.dual_attn_at_src = nn.ModuleDict({k: self.build_dual_attention(
+                #     self.embed_dim, args) for k in self.subtasks})
+                self.dual_attn_at_src = self.build_dual_attention(
+                    self.dual_attn_names,
+                    self.embed_dim,
+                    args,
+                    shared=self.shared_dual_attn,
+                )
 
         if self.merge_operator is not None:
             if self.merge_operator == "sum":
                 if "self" in self.dual_attn_position:
                     self.merge_sum_weight_self = nn.ParameterDict({k: torch.nn.Parameter(
-                        torch.tensor(merge_sum_weight_init)) for k in self.subtasks})
+                        torch.tensor(merge_sum_weight_init)) for k in self.dual_attn_names})
                 if "source" in self.dual_attn_position:
                     self.merge_sum_weight_source = nn.ParameterDict({k: torch.nn.Parameter(
-                    torch.tensor(merge_sum_weight_init)) for k in self.subtasks})
+                    torch.tensor(merge_sum_weight_init)) for k in self.dual_attn_names})
             elif self.merge_operator == "concat":
                 if "self" in self.dual_attn_position:
                     self.merge_concat_self = nn.ModuleDict({k: nn.Linear(
-                        self.embed_dim*2, self.embed_dim) for k in self.subtasks})
+                        self.embed_dim*2, self.embed_dim) for k in self.dual_attn_names})
                 if "source" in self.dual_attn_position:
                     self.merge_concat_source = nn.ModuleDict({k: nn.Linear(
-                        self.embed_dim*2, self.embed_dim) for k in self.subtasks})
+                        self.embed_dim*2, self.embed_dim) for k in self.dual_attn_names})
 
         self.activation_fn = utils.get_activation_fn(
             activation=str(args.activation_fn)
@@ -170,7 +195,7 @@ class TransformerDualDecoderLayer(nn.Module):
             q_noise=self.quant_noise,
             qn_block_size=self.quant_noise_block_size,
         )
-    def build_dual_attention(self, embed_dim, args):
+    def _build_dual_attention(self, embed_dim, args):
         return MultiheadAttention(
             embed_dim,
             args.decoder_attention_heads,
@@ -179,6 +204,17 @@ class TransformerDualDecoderLayer(nn.Module):
             q_noise=self.quant_noise,
             qn_block_size=self.quant_noise_block_size,
         )
+
+    def build_dual_attention(self, dual_attn_names, embed_dim, args, shared=False):
+        if not dual_attn_names:
+            return None
+        
+        if shared:
+            dual_attn = self._build_dual_attention(embed_dim, args)
+            return nn.ModuleDict({k: dual_attn for k in dual_attn_names})
+
+        return nn.ModuleDict({k: self._build_dual_attention(embed_dim, args)
+                                    for k in dual_attn_names})
 
     def prepare_for_onnx_export_(self):
         self.onnx_trace = True
@@ -200,6 +236,7 @@ class TransformerDualDecoderLayer(nn.Module):
         dual_attn_padding_mask: Optional[Tuple[torch.Tensor]] = (None, None),
         need_attn: bool = False,
         need_head_weights: bool = False,
+        dual_attn_names: Optional[List[str]] = None,
     ):
         """
         Args:
@@ -214,6 +251,7 @@ class TransformerDualDecoderLayer(nn.Module):
         Returns:
             encoded output of shape `(seq_len, batch, embed_dim)`
         """
+        ntask = len(self.subtasks)
         if need_head_weights:
             need_attn = True
 
@@ -244,22 +282,22 @@ class TransformerDualDecoderLayer(nn.Module):
                 assert encoder_out is not None
                 self_attn_mask = tuple([torch.cat(
                     (x[i].new_zeros(x[i].size(0), encoder_out.size(0)), self_attn_mask[i]), dim=1
-                ) for i in range(len(self.subtasks))])
+                ) for i in range(ntask)])
             if self_attn_padding_mask != (None, None):
                 if encoder_padding_mask is None:
                     assert encoder_out is not None
                     encoder_padding_mask = tuple([self_attn_padding_mask[i].new_zeros(
                         encoder_out.size(1), encoder_out.size(0)
-                    ) for i in range(len(self.subtasks))])
+                    ) for i in range(ntask)])
                 self_attn_padding_mask = tuple([torch.cat(
                     (encoder_padding_mask[i], self_attn_padding_mask[i]), dim=1
-                ) for i in range(len(self.subtasks))])
+                ) for i in range(ntask)])
             assert encoder_out is not None
             y = torch.cat((encoder_out, x), dim=0)
         else:
             y = x
 
-        x_tmp, attn_tmp = [None] * len(self.subtasks), [None] * len(self.subtasks)
+        x_tmp, attn_tmp = [None] * ntask, [None] * ntask
         for i, task in enumerate(self.subtasks):
             x_tmp[i], attn_tmp[i] = self.self_attn[task](
                 query=x[i],
@@ -274,8 +312,8 @@ class TransformerDualDecoderLayer(nn.Module):
     
         # Dual-attention layer at self
         if self.dual_attn_at_self is not None:
-            x_tmp, attn_tmp = [None] * len(self.subtasks), [None] * len(self.subtasks)
-            for i, task in enumerate(self.subtasks):
+            x_tmp, attn_tmp = [None] * ntask, [None] * ntask
+            for i, task in enumerate(dual_attn_names):
                 z, _ = self.dual_attn_at_self[task](
                     query=y[i],
                     key=y[1-i],
@@ -317,7 +355,7 @@ class TransformerDualDecoderLayer(nn.Module):
                 logging.info(f'saved_state: {saved_state}')
                 logging.info(f'incremental_state: {incremental_state}')
 
-            x_tmp, attn_tmp = [None] * len(self.subtasks), [None] * len(self.subtasks)
+            x_tmp, attn_tmp = [None] * ntask, [None] * ntask
             for i, task in enumerate(self.subtasks):
                 x_tmp[i], attn_tmp[i] = self.encoder_attn[task](
                     query=x[i],
@@ -333,8 +371,8 @@ class TransformerDualDecoderLayer(nn.Module):
 
             # Dual-attention layer at encoder-decoder attention (called source attention)
             if self.dual_attn_at_src is not None:
-                x_tmp, attn_tmp = [None] * len(self.subtasks), [None] * len(self.subtasks)
-                for i, task in enumerate(self.subtasks):
+                x_tmp, attn_tmp = [None] * ntask, [None] * ntask
+                for i, task in enumerate(dual_attn_names):
                     z, _ = self.dual_attn_at_src[task](
                         query=y[i],
                         key=y[1-i],

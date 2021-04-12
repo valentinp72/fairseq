@@ -61,9 +61,14 @@ class S2TDualDecoderTransformerModel(FairseqEncoderDecoderModel):
         parser.add_argument('--merge-sum-weight-init', type=float, metavar='D', default=0.0,
                             help="Init weight for sum merging operator")
         parser.add_argument('--wait-k-asr', default=0, type=int,
-                            help='ASR decoder is k steps ahead of ST decoder.')
+                            help="ASR decoder is k steps ahead of ST decoder.")
         parser.add_argument('--wait-k-st', default=0, type=int,
-                            help='ST decoder is k steps ahead of ASR decoder.')
+                            help="ST decoder is k steps ahead of ASR decoder.")
+        parser.add_argument('--dual-attn-lang', action="store_true",
+                            help="Use language-specific dual-attn layers.")
+        parser.add_argument('--dual-lang-pairs', type=str, default=None,
+                            help="Language pairs in training, separated by comma.\
+                            Required if --dual-attn-lang is set to True")
 
     @classmethod
     def build_encoder(cls, args):
