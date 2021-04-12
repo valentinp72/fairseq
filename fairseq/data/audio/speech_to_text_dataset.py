@@ -771,6 +771,7 @@ class SpeechToTextDatasetCreator(object):
         speaker_to_id=None,
         subtasks: str = None,
         multitask: Optional[Dict] = None,
+        homogeneous_batch: bool = False,
     ) -> SpeechToTextDataset:
         datasets = [
             cls._from_tsv(

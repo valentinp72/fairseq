@@ -59,6 +59,10 @@ class SpeechToTextTask(LegacyFairseqTask):
             type=str, 
             metavar='STR', 
             help="List of subtasks separated by _")
+        parser.add_argument(
+            '--homogeneous-batch', 
+            action='store_true',
+            help='Use homogeneous batch in training and evaluation.')
 
     def __init__(self, args, tgt_dict):
         super().__init__(args)
