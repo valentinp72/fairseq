@@ -439,10 +439,10 @@ def _main(cfg: DictConfig, output_file):
                                 detok_hypo_str[k], add_if_not_exist=True
                             ) for k in range(2)]
                         if hasattr(scorer, "add_string"):
-                            # for k in range(2):
+                            # scorer.add_string(target_str[0], detok_hypo_str[0])
                             scorer.add_string(target_str[1], detok_hypo_str[1])
                         else:
-                            # for k in range(2):
+                            # scorer.add(target_tokens[0], hypo_tokens[0])
                             scorer.add(target_tokens[1], hypo_tokens[1])
 
         wps_meter.update(num_generated_tokens)

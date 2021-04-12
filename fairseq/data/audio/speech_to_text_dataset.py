@@ -189,6 +189,7 @@ class SpeechToTextDataset(FairseqDataset):
                 tgt_lang_tags = [
                     "[{}]".format(t) for t in set(self.tgt_langs)
             ]
+            logging.info(f'{dict({l: self.tgt_dict.index(l) for l in tgt_lang_tags})}')
             assert all(t in self.tgt_dict for t in tgt_lang_tags)
 
     @classmethod

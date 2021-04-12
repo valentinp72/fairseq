@@ -321,7 +321,7 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         self,
         prev_output_tokens,
         encoder_out: Optional[Dict[str, List[Tensor]]] = None,
-        incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+        incremental_state: Optional[Tuple[Dict[str, Dict[str, Optional[Tensor]]]]] = (None, None),
         features_only: bool = False,
         full_context_alignment: bool = False,
         alignment_layer: Optional[int] = None,
@@ -363,7 +363,7 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         self,
         prev_output_tokens,
         encoder_out: Optional[Dict[str, List[Tensor]]],
-        incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+        incremental_state: Optional[Tuple[Dict[str, Dict[str, Optional[Tensor]]]]] = (None, None),
         full_context_alignment: bool = False,
         alignment_layer: Optional[int] = None,
         alignment_heads: Optional[int] = None,
@@ -387,7 +387,7 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         self,
         prev_output_tokens,
         encoder_out: Optional[Dict[str, List[Tensor]]],
-        incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+        incremental_state: Optional[Tuple[Dict[str, Dict[str, Optional[Tensor]]]]] = (None, None),
         full_context_alignment: bool = False,
         alignment_layer: Optional[int] = None,
         alignment_heads: Optional[int] = None,
@@ -417,10 +417,10 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         # embed positions
         positions = tuple(
             [self.embed_positions[task](
-                prev_output_tokens[i], incremental_state=incremental_state) 
+                prev_output_tokens[i], incremental_state=incremental_state[i]) 
                 for i, task in enumerate(self.subtasks)]) if self.embed_positions is not None else None
 
-        if incremental_state is not None:
+        if incremental_state != (None, None):
             prev_output_tokens = tuple([prev_output_tokens[i][:, -1:] for i in range(len(self.subtasks))])
             if positions is not None:
                 positions = tuple([positions[i][:, -1:] for i in range(len(self.subtasks))])
@@ -464,7 +464,7 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         attn: Optional[Tensor] = None
         inner_states: List[Optional[Tensor]] = [x]
         for idx, layer in enumerate(self.layers):
-            if incremental_state is None and not full_context_alignment:
+            if incremental_state == (None, None) and not full_context_alignment:
                 self_attn_mask = self.buffered_future_mask(x)
                 dual_attn_mask = self.buffered_future_mask(x, dual_attn=True)
             else:

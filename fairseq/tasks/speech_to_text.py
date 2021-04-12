@@ -238,15 +238,10 @@ class SpeechToTextTask(LegacyFairseqTask):
             for s, i in self.tgt_dict.indices.items()
             if SpeechToTextDataset.is_lang_tag(s)
         }
-
-        if extra_gen_cls_kwargs is None:
-            extra_gen_cls_kwargs = {}
-        extra_gen_cls_kwargs["symbols_to_strip_from_output"] = lang_token_ids
-
-        eos_token = (
-            args.eos_token
-            if "eos_token" in args and args.eos_token is not None
-            else self.data_cfg.config.get("eos_token", None)
+        logging.info(f'symbols_to_strip_from_output: {lang_token_ids}')
+        extra_gen_cls_kwargs = {"symbols_to_strip_from_output": lang_token_ids}
+        return super().build_generator(
+            models, args, seq_gen_cls=None, extra_gen_cls_kwargs=extra_gen_cls_kwargs
         )
 
         if self.data_cfg.prepend_bos_and_append_tgt_lang_tag and not eos_token:

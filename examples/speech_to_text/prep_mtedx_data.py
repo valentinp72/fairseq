@@ -35,9 +35,8 @@ from fairseq.data.audio.audio_utils import get_waveform, convert_waveform
 log = logging.getLogger(__name__)
 
 
-MANIFEST_COLUMNS = [
-    "id", "audio", "n_frames", "tgt_text", "speaker", "tgt_lang"
-]
+MANIFEST_COLUMNS = ["id", "audio", "n_frames", "tgt_text", "speaker", "tgt_lang",
+                    "src_text", "src_lang"]
 
 
 class mTEDx(Dataset):
@@ -48,9 +47,13 @@ class mTEDx(Dataset):
     """
 
     SPLITS = ["train", "valid", "test"]
-    LANGPAIRS = ["es-es", "fr-fr", "pt-pt", "it-it", "ru-ru", "el-el", "ar-ar",
-                 "de-de", "es-en", "es-fr", "es-pt", "es-it", "fr-en", "fr-es",
-                 "fr-pt", "pt-en", "pt-es", "it-en", "it-es", "ru-en", "el-en"]
+    # LANGPAIRS = ["es-es", "fr-fr", "pt-pt", "it-it", "ru-ru", "el-el", "ar-ar", "de-de",
+    #              "es-en", "es-fr", "es-pt", "es-it", "fr-en", "fr-es", "fr-pt",
+    #              "pt-en", "pt-es", "it-en", "it-es", "ru-en", "el-en"]
+    LANGPAIRS = ["es-es", "fr-fr", "pt-pt", "it-it",
+                 "es-en", "es-fr", "es-pt", "es-it", 
+                 "fr-en", "fr-es", "fr-pt",
+                 "pt-en"] # IWSLT pairs
 
     def __init__(self, root: str, lang: str, split: str) -> None:
         assert split in self.SPLITS and lang in self.LANGPAIRS
@@ -96,17 +99,15 @@ class mTEDx(Dataset):
                         segment["speaker_id"],
                         tgt,
                         _id,
+                        src,
                     )
                 )
 
-    def __getitem__(
-            self, n: int
-    ) -> Tuple[torch.Tensor, int, str, str, str, str, str]:
-        wav_path, offset, n_frames, sr, src_utt, tgt_utt, spk_id, tgt_lang, \
-            utt_id = self.data[n]
+    def __getitem__(self, n: int) -> Tuple[torch.Tensor, int, str, str, str, str, str]:
+        wav_path, offset, n_frames, sr, src_utt, tgt_utt, spk_id, tgt_lang, utt_id, src_lang = self.data[n]
         waveform, _ = get_waveform(wav_path, frames=n_frames, start=offset)
         waveform = torch.from_numpy(waveform)
-        return waveform, sr, src_utt, tgt_utt, spk_id, tgt_lang, utt_id
+        return waveform, sr, src_utt, tgt_utt, spk_id, tgt_lang, utt_id, src_lang
 
     def __len__(self) -> int:
         return len(self.data)
@@ -152,11 +153,12 @@ def process(args):
         # Generate TSV manifest
         print("Generating manifest...")
         train_text = []
+        dict_suffix = "" if not args.joint_asr_dict else "_joint_asr_dict"
         for split in mTEDx.SPLITS:
             is_train_split = split.startswith("train")
             manifest = {c: [] for c in MANIFEST_COLUMNS}
-            ds = mTEDx(args.data_root, lang, split)
-            for _, _, src_utt, tgt_utt, spk_id, tgt_lang, utt_id in tqdm(ds):
+            dataset = mTEDx(args.data_root, lang, split)
+            for wav, sr, src_utt, tgt_utt, speaker_id, tgt_lang, utt_id, src_lang in tqdm(dataset):
                 manifest["id"].append(utt_id)
                 manifest["audio"].append(audio_paths[utt_id])
                 manifest["n_frames"].append(audio_lengths[utt_id])
@@ -165,14 +167,18 @@ def process(args):
                 )
                 manifest["speaker"].append(spk_id)
                 manifest["tgt_lang"].append(tgt_lang)
+                manifest["src_text"].append(src_utt)
+                manifest["src_lang"].append(src_lang)
             if is_train_split:
                 train_text.extend(manifest["tgt_text"])
+                if args.joint_asr_dict:
+                    train_text.extend(manifest["src_text"])
             df = pd.DataFrame.from_dict(manifest)
             df = filter_manifest_df(df, is_train_split=is_train_split)
-            save_df_to_tsv(df, cur_root / f"{split}_{args.task}.tsv")
+            save_df_to_tsv(df, cur_root / f"{split}_{args.task}{dict_suffix}.tsv")
         # Generate vocab
         v_size_str = "" if args.vocab_type == "char" else str(args.vocab_size)
-        spm_filename_prefix = f"spm_{args.vocab_type}{v_size_str}_{args.task}"
+        spm_filename_prefix = f"spm_{args.vocab_type}{v_size_str}_{args.task}{dict_suffix}"
         with NamedTemporaryFile(mode="w") as f:
             for t in train_text:
                 f.write(t + "\n")
@@ -208,19 +214,24 @@ def process_joint(args):
         "do not have downloaded data available for all languages"
     # Generate vocab
     vocab_size_str = "" if args.vocab_type == "char" else str(args.vocab_size)
-    spm_filename_prefix = f"spm_{args.vocab_type}{vocab_size_str}_{args.task}"
+    dict_suffix = "" if not args.joint_asr_dict else "_joint_asr_dict"
+    spm_filename_prefix = f"spm_{args.vocab_type}{vocab_size_str}_{args.task}{dict_suffix}{args.joint_suffix}"
     with NamedTemporaryFile(mode="w") as f:
         for lang in mTEDx.LANGPAIRS:
             tsv_path = cur_root / f"{lang}" / f"train_{args.task}.tsv"
             df = load_df_from_tsv(tsv_path)
             for t in df["tgt_text"]:
                 f.write(t + "\n")
+            if args.joint_asr_dict:
+                for t in df["src_text"]:
+                    f.write(t + "\n")
         special_symbols = None
         if args.joint:
-            # Add tgt_lang tags to dict
-            special_symbols = list(
-                {f'<lang:{lang.split("-")[1]}>' for lang in mTEDx.LANGPAIRS}
-            )
+            if not args.joint_asr_dict:
+                # Add tgt_lang tags to dict
+                special_symbols = list({f'<lang:{lang.split("-")[1]}>' for lang in mTEDx.LANGPAIRS})
+            else:
+                special_symbols = list({f'<lang:{lang.split("-")[i]}>' for i in range(2) for lang in mTEDx.LANGPAIRS})
         gen_vocab(
             Path(f.name),
             cur_root / spm_filename_prefix,
@@ -231,16 +242,16 @@ def process_joint(args):
     # Generate config YAML
     gen_config_yaml(
         cur_root,
-        spm_filename=spm_filename_prefix + ".model",
-        yaml_filename=f"config_{args.task}.yaml",
+        spm_filename_prefix + ".model",
+        yaml_filename=f"config_{args.task}{dict_suffix}{args.joint_suffix}.yaml",
         specaugment_policy="ld",
         prepend_tgt_lang_tag=(args.joint),
     )
     # Make symbolic links to manifests
     for lang in mTEDx.LANGPAIRS:
         for split in mTEDx.SPLITS:
-            src_path = cur_root / f"{lang}" / f"{split}_{args.task}.tsv"
-            desc_path = cur_root / f"{split}_{lang}_{args.task}.tsv"
+            src_path = cur_root / f"{lang}" / f"{split}_{args.task}{dict_suffix}.tsv"
+            desc_path = cur_root / f"{split}_{lang}_{args.task}{dict_suffix}{args.joint_suffix}.tsv"
             if not desc_path.is_symlink():
                 os.symlink(src_path, desc_path)
 
@@ -259,6 +270,8 @@ def main():
     parser.add_argument("--task", type=str, choices=["asr", "st"])
     parser.add_argument("--joint", action="store_true", help="")
     parser.add_argument("--use-audio-input", action="store_true")
+    parser.add_argument("--joint-asr-dict", action="store_true", help="")
+    parser.add_argument("--joint-suffix", type=str, default="")
     args = parser.parse_args()
 
     if args.joint:

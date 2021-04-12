@@ -191,7 +191,7 @@ class TransformerDualDecoderLayer(nn.Module):
         x,
         encoder_out: Optional[torch.Tensor] = None,
         encoder_padding_mask: Optional[torch.Tensor] = None,
-        incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+        incremental_state: Optional[Tuple[Dict[str, Dict[str, Optional[Tensor]]]]] = (None, None),
         prev_self_attn_state: Optional[List[torch.Tensor]] = None,
         prev_attn_state: Optional[List[torch.Tensor]] = None,
         self_attn_mask: Optional[Tuple[torch.Tensor]] = (None, None),
@@ -230,13 +230,13 @@ class TransformerDualDecoderLayer(nn.Module):
             }
             if len(prev_self_attn_state) >= 3:
                 saved_state["prev_key_padding_mask"] = prev_self_attn_state[2]
-            assert incremental_state is not None
+            assert None not in incremental_state
             self.self_attn._set_input_buffer(incremental_state, saved_state)
-        _self_attn_input_buffer = tuple([self.self_attn[task]._get_input_buffer(incremental_state) 
+        _self_attn_input_buffer = tuple([self.self_attn[task]._get_input_buffer(incremental_state[i]) 
                                     for i, task in enumerate(self.subtasks)])
 
         if self.cross_self_attention and not (
-            incremental_state is not None
+            None not in incremental_state
             and _self_attn_input_buffer is not None
             and "prev_key" in _self_attn_input_buffer
         ):
@@ -266,7 +266,7 @@ class TransformerDualDecoderLayer(nn.Module):
                 key=y[i],
                 value=y[i],
                 key_padding_mask=self_attn_padding_mask[i],
-                incremental_state=incremental_state,
+                incremental_state=incremental_state[i],
                 need_weights=False,
                 attn_mask=self_attn_mask[i],
             )
@@ -281,7 +281,7 @@ class TransformerDualDecoderLayer(nn.Module):
                     key=y[1-i],
                     value=y[1-i],
                     key_padding_mask=dual_attn_padding_mask[i],
-                    incremental_state=incremental_state,
+                    incremental_state=incremental_state[i],
                     need_weights=False,
                     attn_mask=dual_attn_mask[i],
                 )
@@ -324,7 +324,7 @@ class TransformerDualDecoderLayer(nn.Module):
                     key=encoder_out,
                     value=encoder_out,
                     key_padding_mask=encoder_padding_mask,
-                    incremental_state=incremental_state,
+                    incremental_state=incremental_state[i],
                     static_kv=True,
                     need_weights=need_attn or (not self.training and self.need_attn),
                     need_head_weights=need_head_weights,
@@ -340,7 +340,7 @@ class TransformerDualDecoderLayer(nn.Module):
                         key=y[1-i],
                         value=y[1-i],
                         key_padding_mask=dual_attn_padding_mask[i],
-                        incremental_state=incremental_state,
+                        incremental_state=incremental_state[i],
                         need_weights=False,
                         attn_mask=dual_attn_mask[i],
                     )
