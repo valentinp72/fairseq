@@ -420,7 +420,10 @@ class FairseqTask(object):
         except ModuleNotFoundError:
             pass
         try:
-            from fairseq.sequence_generator_dd import SequenceGeneratorDD
+            from fairseq.sequence_generator_dd import (
+                SequenceGeneratorIndependent,
+                SequenceGeneratorDualBeam,
+            )
         except ModuleNotFoundError:
             pass
 
@@ -492,8 +495,10 @@ class FairseqTask(object):
                 extra_gen_cls_kwargs["print_alignment"] = args.print_alignment
             elif getattr(args, "fb_seq_gen", False):
                 seq_gen_cls = FBSequenceGenerator
-            elif getattr(args, "single_joint_beam", False):
-                seq_gen_cls = SequenceGeneratorDD
+            elif getattr(args, "independent_beams", False):
+                seq_gen_cls = SequenceGeneratorIndependent
+            elif getattr(args, "dual_beams", False):
+                seq_gen_cls = SequenceGeneratorDualBeam
             else:
                 seq_gen_cls = SequenceGenerator
 
