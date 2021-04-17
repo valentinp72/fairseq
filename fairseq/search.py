@@ -991,14 +991,6 @@ class DualBeamSearch_inefficient(Search):
         subbeam1_indices = scoreVV_flatten_indices // vocab_size
         subbeam2_indices = scoreVV_flatten_indices.fmod(vocab_size)
 
-        # logging.info(f'step = {step}, scores: {scores.shape}')
-
-        # if step == 0:
-        #     scores = scores.repeat(1,org_beam_size)
-        #     beam_indices = beam_indices.repeat(1,org_beam_size)
-        #     subbeam1_indices = subbeam1_indices.repeat(1,org_beam_size)
-        #     subbeam2_indices = subbeam2_indices.repeat(1,org_beam_size)
-
         scores_buf = [scores, scores]
         indices_buf = [subbeam1_indices, subbeam2_indices]
         beams_buf = [beam_indices, beam_indices]
@@ -1023,8 +1015,8 @@ class DualBeamSearch(Search):
         ):
         if isinstance(lprobs, list) or isinstance(lprobs, tuple):
             lprobs = torch.stack(lprobs)
-        if isinstance(scores, list) or isinstance(scores, tuple):
-            scores = torch.stack(scores)
+        # if isinstance(scores, list) or isinstance(scores, tuple):
+        #     scores = torch.stack(scores)
         
         _, bsz, beam_size, vocab_size = lprobs.size()
 
@@ -1036,19 +1028,14 @@ class DualBeamSearch(Search):
         if step == 0:
             # at the first step all hypotheses are equally likely, so use
             # only the first beam
-            # num_inputs x N x V
-            lprobs = lprobs[:, :, 0, :].contiguous()
-            # num_inputs x N x 1 x V
-            lprobs = lprobs.unsqueeze(-2)
+            lprobs = lprobs[:, :, 0, :].contiguous() # num_inputs x N x V
+            lprobs = lprobs.unsqueeze(-2) # num_inputs x N x 1 x V
         else:
             # make probs contain cumulative scores for each hypothesis
             assert scores is not None
-            lprobs = lprobs + scores[:, :, :, step - 1].unsqueeze(-1)
+            lprobs = lprobs + scores.view(bsz, beam_size, -1).unsqueeze(0)[:, :, :, step - 1].unsqueeze(-1)
 
         top_predictions = torch.topk(lprobs, k=min(K, vocab_size - 1))
-
-        # logging.info(f'top_prediction[0]: {top_predictions[0]}')
-        # logging.info(f'top_prediction[1]: {top_predictions[1]}')
         
         # top_predictions[0] is num_inputs x N x B x K
         # xk: N x B x K, ixk: N x B x K
@@ -1057,17 +1044,14 @@ class DualBeamSearch(Search):
         yk = top_predictions[0][1]
         iyk = top_predictions[1][1]
 
-        # logging.info(f'step {step}: xk shape: {xk.shape}, yk shape: {yk.shape}, ixk shape: {ixk.shape}, iyk shape: {iyk.shape}')
         assert xk.shape == (bsz, B, K) and ixk.shape == (bsz, B, K)
 
-        scores = (torch.matmul(xk.unsqueeze(-1), torch.ones_like(xk).unsqueeze(-2))
+        scores = (torch.matmul(xk.unsqueeze(-1), torch.ones_like(xk).unsqueeze(-2)) * 0.1
                 + torch.matmul(torch.ones_like(yk).unsqueeze(-1), yk.unsqueeze(-1).transpose(-1,-2)))
-        # logging.info(f'scores shape = {scores.shape}')
+
         # Top k of N x BK^2 tensor
         # scores: N x K, inds: N x K
         scores, inds = torch.topk(scores.view(bsz, -1), k=K)
-        # logging.info(f'scores after topk: {scores.shape}')
-        # logging.info(f'inds: {inds.shape}\n{inds}')
 
         # Convert back to the indices in the B x B pairwise score matrices
         # N x cand_size
@@ -1086,33 +1070,15 @@ class DualBeamSearch(Search):
         # the subbeam1 index
         subbeam1_vocab_indices = torch.zeros_like(subbeam1_indices)
         subbeam2_vocab_indices = torch.zeros_like(subbeam2_indices)
-        # logging.info(f'beam_indices: {beam_indices.shape}, subbeam1_indices: {subbeam1_indices.shape}, subbeam2_indices: {subbeam2_indices.shape}')
+
         for i in range(bsz):
             for j in range(K):
-                # logging.info(f'ixk: {ixk.shape}, beam_indices[{j}] : {beam_indices[j]}, subbeam1_indices[{j}] : {subbeam1_indices[j]}')
-                # logging.info(f'iyk: {iyk.shape}, beam_indices[{j}] : {beam_indices[j]}, subbeam2_indices[{j}] : {subbeam2_indices[j]}')
                 subbeam1_vocab_indices[i, j] = ixk[i, beam_indices[i,j], subbeam1_indices[i,j]]
                 subbeam2_vocab_indices[i, j] = iyk[i, beam_indices[i,j], subbeam2_indices[i,j]]
 
-        # logging.info(f'step = {step}, ixk:\n{ixk}')
-        # logging.info(f'step = {step}, iyk:\n{iyk}')
-        # logging.info(f'step = {step}, scores: {scores.shape}')
-        # logging.info(f'step = {step}, subbeam1_vocab_indices:\n{subbeam1_vocab_indices}')
-        # logging.info(f'step = {step}, subbeam2_vocab_indices:\n{subbeam2_vocab_indices}')
-
-        # if step == 0:
-        #     scores = scores.repeat(1, beam_size)
-        #     subbeam1_vocab_indices = subbeam1_vocab_indices.repeat(1, beam_size)
-        #     subbeam2_vocab_indices = subbeam2_vocab_indices.repeat(1, beam_size)
-        #     beam_indices = beam_indices.repeat(1, beam_size)
-
-        scores_buf = [scores, scores]
+        scores_buf = scores
         indices_buf = [subbeam1_vocab_indices, subbeam2_vocab_indices]
-        beams_buf = [beam_indices, beam_indices]
-
-        # if step > 50:
-        #     raise Exception("Toto")
-
+        beams_buf = beam_indices
 
         # At this point, beams_buf and indices_buf are single-dim and contain relative indices
         return scores_buf, indices_buf, beams_buf
