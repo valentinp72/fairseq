@@ -153,7 +153,6 @@ def process(args):
         # Generate TSV manifest
         print("Generating manifest...")
         train_text = []
-        dict_suffix = "" if not args.joint_asr_dict else "_joint_asr_dict"
         for split in mTEDx.SPLITS:
             is_train_split = split.startswith("train")
             manifest = {c: [] for c in MANIFEST_COLUMNS}
@@ -175,10 +174,10 @@ def process(args):
                     train_text.extend(manifest["src_text"])
             df = pd.DataFrame.from_dict(manifest)
             df = filter_manifest_df(df, is_train_split=is_train_split)
-            save_df_to_tsv(df, cur_root / f"{split}_{args.task}{dict_suffix}.tsv")
+            save_df_to_tsv(df, cur_root / f"{split}_{args.task}.tsv")
         # Generate vocab
         v_size_str = "" if args.vocab_type == "char" else str(args.vocab_size)
-        spm_filename_prefix = f"spm_{args.vocab_type}{v_size_str}_{args.task}{dict_suffix}"
+        spm_filename_prefix = f"spm_{args.vocab_type}{v_size_str}_{args.task}"
         with NamedTemporaryFile(mode="w") as f:
             for t in train_text:
                 f.write(t + "\n")
@@ -214,8 +213,7 @@ def process_joint(args):
         "do not have downloaded data available for all languages"
     # Generate vocab
     vocab_size_str = "" if args.vocab_type == "char" else str(args.vocab_size)
-    dict_suffix = "" if not args.joint_asr_dict else "_joint_asr_dict"
-    spm_filename_prefix = f"spm_{args.vocab_type}{vocab_size_str}_{args.task}{dict_suffix}{args.joint_suffix}"
+    spm_filename_prefix = f"spm_{args.vocab_type}{vocab_size_str}_{args.task}{args.joint_suffix}"
     with NamedTemporaryFile(mode="w") as f:
         for lang in mTEDx.LANGPAIRS:
             tsv_path = cur_root / f"{lang}" / f"train_{args.task}.tsv"
@@ -243,15 +241,15 @@ def process_joint(args):
     gen_config_yaml(
         cur_root,
         spm_filename_prefix + ".model",
-        yaml_filename=f"config_{args.task}{dict_suffix}{args.joint_suffix}.yaml",
+        yaml_filename=f"config_{args.task}{args.joint_suffix}.yaml",
         specaugment_policy="ld",
         prepend_tgt_lang_tag=(args.joint),
     )
     # Make symbolic links to manifests
     for lang in mTEDx.LANGPAIRS:
         for split in mTEDx.SPLITS:
-            src_path = cur_root / f"{lang}" / f"{split}_{args.task}{dict_suffix}.tsv"
-            desc_path = cur_root / f"{split}_{lang}_{args.task}{dict_suffix}{args.joint_suffix}.tsv"
+            src_path = cur_root / f"{lang}" / f"{split}_{args.task}.tsv"
+            desc_path = cur_root / f"{split}_{lang}_{args.task}{args.joint_suffix}.tsv"
             if not desc_path.is_symlink():
                 os.symlink(src_path, desc_path)
 
