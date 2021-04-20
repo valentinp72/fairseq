@@ -230,6 +230,18 @@ def s2t_dd_transformer_xs(args):
     base_architecture(args)
 
 
+@register_model_architecture("s2t_dd_transformer", "s2t_dd_transformer_iwslt_xs_dec")
+def s2t_dd_transformer_iwslt_xs_dec(args):
+    args.encoder_layers = getattr(args, "encoder_layers", 12)
+    args.decoder_layers = getattr(args, "decoder_layers", 3)
+    args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 256)
+    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 256 * 4)
+    args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 4)
+    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 4)
+    args.dropout = getattr(args, "dropout", 0.3)
+    base_architecture(args)
+
+
 @register_model_architecture("s2t_dd_transformer", "s2t_dd_transformer_s")
 def s2t_dd_transformer_s(args):
     args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 256)
