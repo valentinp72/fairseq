@@ -277,6 +277,18 @@ class S2TTransformerModel(FairseqEncoderDecoderModel):
             default=2,
             help="# of channels in Conv1d subsampling layers",
         )
+        parser.add_argument(
+            "--decoder-asr-init-weights",
+            type=str,
+            metavar="STR",
+            help="model to take decoder weights from (for initialization)",
+        )
+        parser.add_argument(
+            "--decoder-st-init-weights",
+            type=str,
+            metavar="STR",
+            help="model to take decoder weights from (for initialization)",
+        )
 
     @classmethod
     def build_encoder(cls, args):
@@ -296,7 +308,28 @@ class S2TTransformerModel(FairseqEncoderDecoderModel):
 
     @classmethod
     def build_decoder(cls, args, task, embed_tokens):
-        return TransformerDecoderScriptable(args, task.target_dictionary, embed_tokens)
+        decoder = TransformerDecoderScriptable(args, task.target_dictionary, embed_tokens)
+        if getattr(args, "decoder_asr_init_weights", None):
+            decoder = checkpoint_utils.load_decoder_weights(
+                component=decoder,
+                sub_component="asr",
+                checkpoint=args.decoder_asr_init_weights,
+            )
+            logger.info(
+                f"loaded pretrained ASR decoder from: "
+                f"{args.decoder_asr_init_weights}"
+            )
+        if getattr(args, "decoder_st_init_weights", None):
+            decoder = checkpoint_utils.load_decoder_weights(
+                component=decoder,
+                sub_component="st", 
+                checkpoint=args.decoder_st_init_weights,
+            )
+            logger.info(
+                f"loaded pretrained ST decoder from: "
+                f"{args.decoder_st_init_weights}"
+            )
+        return decoder
 
     @classmethod
     def build_model(cls, args, task):
@@ -622,15 +655,6 @@ def s2t_transformer_s(args):
 @register_model_architecture("s2t_transformer", "s2t_transformer_xs")
 def s2t_transformer_xs(args):
     args.encoder_layers = getattr(args, "encoder_layers", 6)
-    args.decoder_layers = getattr(args, "decoder_layers", 3)
-    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 256 * 4)
-    args.dropout = getattr(args, "dropout", 0.3)
-    s2t_transformer_s(args)
-
-
-@register_model_architecture("s2t_transformer", "s2t_transformer_iwslt_xs_dec")
-def s2t_transformer_iwslt_xs_dec(args):
-    args.encoder_layers = getattr(args, "encoder_layers", 12)
     args.decoder_layers = getattr(args, "decoder_layers", 3)
     args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 256 * 4)
     args.dropout = getattr(args, "dropout", 0.3)

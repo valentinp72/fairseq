@@ -46,7 +46,6 @@ class SequenceGeneratorIndependent(SequenceGenerator):
             self.model = models
         else:
             self.model = EnsembleModelDD(models)
-        self.search = (search.DualBeamSearch_independent(tgt_dict))
 
     def do_beam_search(
         self,
@@ -983,7 +982,6 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
             self.model = models
         else:
             self.model = EnsembleModelDD(models)
-        self.search = (search.DualBeamSearch(tgt_dict))
 
     def _generate(
         self,

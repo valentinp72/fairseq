@@ -576,11 +576,28 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
             self._future_mask = tuple(_future_mask_tmp)
             return tuple([self._future_mask[i][:dim[i], :dim[i]] for i in range(ntask)])
         else:
-            for i in range(ntask):
-                _future_mask_tmp[i] = torch.triu(
-                    utils.fill_with_neg_inf(torch.zeros([dim[i], dim[1-i]])), 1
-                )
-                _future_mask_tmp[i] = _future_mask_tmp[i].to(tuple_tensor[i])
+            if self.wait_k_asr == 0 and self.wait_k_st == 0:
+                for i in range(ntask):
+                    _future_mask_tmp[i] = torch.triu(
+                        utils.fill_with_neg_inf(torch.zeros([dim[i], dim[1-i]])), 1
+                    )
+                    _future_mask_tmp[i] = _future_mask_tmp[i].to(tuple_tensor[i])
+            # elif self.wait_k_asr > 0:
+            #     for i in range(ntask):
+            #         _future_mask_tmp[i] = torch.triu(
+            #             utils.fill_with_neg_inf(torch.zeros([dim[i], dim[1-i]])), 
+            #             -self.wait_k_asr if i == 0 else self.wait_k_asr
+            #         )
+            #         # logging.info(f'_future_mask_tmp[{i}]: {_future_mask_tmp[i]}')
+            #         _future_mask_tmp[i] = _future_mask_tmp[i].to(tuple_tensor[i])
+            # elif self.wait_k_st > 0:
+            #     for i in range(ntask):
+            #         _future_mask_tmp[i] = torch.triu(
+            #             utils.fill_with_neg_inf(torch.zeros([dim[i], dim[1-i]])), 
+            #             self.wait_k_st if i == 0 else -self.wait_k_st
+            #         )
+            #         _future_mask_tmp[i] = _future_mask_tmp[i].to(tuple_tensor[i])
+
             self._future_mask_dual = tuple(_future_mask_tmp)
             return tuple([self._future_mask_dual[i][:dim[i], :dim[1-i]] for i in range(ntask)])
 

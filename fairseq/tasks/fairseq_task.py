@@ -497,8 +497,10 @@ class FairseqTask(object):
                 seq_gen_cls = FBSequenceGenerator
             elif getattr(args, "independent_beams", False):
                 seq_gen_cls = SequenceGeneratorIndependent
+                search_strategy = search.DualBeamSearch_independent(self.target_dictionary)
             elif getattr(args, "dual_beams", False):
                 seq_gen_cls = SequenceGeneratorDualBeam
+                search_strategy = search.DualBeamSearch(self.target_dictionary)
             else:
                 seq_gen_cls = SequenceGenerator
 

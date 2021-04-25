@@ -1054,27 +1054,35 @@ class DualBeamSearch(Search):
         scores, inds = torch.topk(scores.view(bsz, -1), k=K)
 
         # Convert back to the indices in the B x B pairwise score matrices
-        # N x cand_size
+        # N x K
         beam_indices = inds // K**2 # 1st index in the B x K x K
         scoreBB_flatten_indices = inds.fmod(K**2)
         subbeam1_indices = scoreBB_flatten_indices // K # 2nd index in the B x K x K
         subbeam2_indices = scoreBB_flatten_indices.fmod(K) # 3rd index in the B x K x K
 
-        # subbeam2_indices = inds.fmod(K) # 3rd index in the B x K x K
-        # BK_indices = inds // K # first BK indices in the B x K x K
-        # subbeam1_indices = BK_indices.fmod(K) # 2nd index in the B x K x K
-        # beam_indices = BK_indices // K
-
         # We need to convert the 2nd and 3rd indices above to vocabulary indices
-        # ixk: N x B x B where the first B is the main beam index, the second is
-        # the subbeam1 index
         subbeam1_vocab_indices = torch.zeros_like(subbeam1_indices)
         subbeam2_vocab_indices = torch.zeros_like(subbeam2_indices)
 
-        for i in range(bsz):
-            for j in range(K):
-                subbeam1_vocab_indices[i, j] = ixk[i, beam_indices[i,j], subbeam1_indices[i,j]]
-                subbeam2_vocab_indices[i, j] = iyk[i, beam_indices[i,j], subbeam2_indices[i,j]]
+        # In the following, we basically do this:
+        # for i in range(bsz):
+        #     for j in range(K):
+        #         subbeam1_vocab_indices[i, j] = ixk[i, beam_indices[i,j], subbeam1_indices[i,j]]
+        #         subbeam2_vocab_indices[i, j] = iyk[i, beam_indices[i,j], subbeam2_indices[i,j]]
+        # This is faster than the above for loop but still not optimal
+        # subbeam1_vocab_indices = torch.einsum('iij->ij', ixk[:,beam_indices,subbeam1_indices])
+        # subbeam2_vocab_indices = torch.einsum('iij->ij', iyk[:,beam_indices,subbeam2_indices])
+
+        # Linearize the last two dims and index in a contiguous x
+        ixk = ixk.contiguous()
+        lin_idx = subbeam1_indices + ixk.size(-1) * beam_indices
+        ixk = ixk.view(-1, ixk.size(1) * ixk.size(2))
+        subbeam1_vocab_indices = ixk.gather(-1, lin_idx)
+
+        iyk = iyk.contiguous()
+        lin_idx = subbeam2_indices + iyk.size(-1) * beam_indices
+        iyk = iyk.view(-1, iyk.size(1) * iyk.size(2))
+        subbeam2_vocab_indices = iyk.gather(-1, lin_idx)
 
         scores_buf = scores
         indices_buf = [subbeam1_vocab_indices, subbeam2_vocab_indices]

@@ -966,6 +966,40 @@ def load_pretrained_component_from_model_different_keys_v2(
     return component
 
 
+def load_decoder_weights(
+    component: FairseqDecoder, sub_component: str, checkpoint: str,
+):
+    """
+    Load a pretrained FairseqEncoder or FairseqDecoder from checkpoint into the
+    provided `component` object. If state_dict fails to load, there may be a
+    mismatch in the architecture of the corresponding `component` found in the
+    `checkpoint` file.
+    """
+    if not PathManager.exists(checkpoint):
+        raise IOError("Model file not found: {}".format(checkpoint))
+    state = load_checkpoint_to_cpu(checkpoint)
+    if isinstance(component, FairseqDecoder):
+        component_type = "decoder"
+    else:
+        raise ValueError(
+            "component to load must be either a FairseqEncoder or "
+            "FairseqDecoder. Loading other component types are not supported."
+        )
+    component_state_dict = OrderedDict()
+    for key in component.state_dict().keys():
+        if f".{sub_component}" in key:
+            ckpt_key = key.replace(f".{sub_component}", "")
+            if ckpt_key in state["model"]:
+                component_state_dict[key] = state["model"][ckpt_key]
+            else:
+                component_state_dict[key] = component.state_dict()[key]
+        else:
+            component_state_dict[key] = component.state_dict()[key]
+
+    component.load_state_dict(component_state_dict, strict=True)
+    return component
+
+
 def verify_checkpoint_directory(save_dir: str) -> None:
     if not os.path.exists(save_dir):
         os.makedirs(save_dir, exist_ok=True)

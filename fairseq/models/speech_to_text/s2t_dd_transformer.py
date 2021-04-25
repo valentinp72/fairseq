@@ -76,7 +76,31 @@ class S2TDualDecoderTransformerModel(FairseqEncoderDecoderModel):
 
     @classmethod
     def build_decoder(cls, args, task, embed_tokens):
-        return TransformerDualDecoderScriptable(args, task.target_dictionary, embed_tokens)
+        decoder = TransformerDualDecoderScriptable(args, 
+                                                   task.target_dictionary, 
+                                                   embed_tokens
+                                                   )
+        if getattr(args, "decoder_asr_init_weights", None):
+            decoder = checkpoint_utils.load_decoder_weights(
+                component=decoder,
+                sub_component="asr",
+                checkpoint=args.decoder_asr_init_weights,
+            )
+            logger.info(
+                f"loaded pretrained ASR decoder from: "
+                f"{args.decoder_asr_init_weights}"
+            )
+        if getattr(args, "decoder_st_init_weights", None):
+            decoder = checkpoint_utils.load_decoder_weights(
+                component=decoder,
+                sub_component="st", 
+                checkpoint=args.decoder_st_init_weights,
+            )
+            logger.info(
+                f"loaded pretrained ST decoder from: "
+                f"{args.decoder_st_init_weights}"
+            )
+        return decoder
 
     @classmethod
     def build_model(cls, args, task):
@@ -221,18 +245,6 @@ def s2t_dd_transformer_xxs(args):
 @register_model_architecture("s2t_dd_transformer", "s2t_dd_transformer_xs")
 def s2t_dd_transformer_xs(args):
     args.encoder_layers = getattr(args, "encoder_layers", 6)
-    args.decoder_layers = getattr(args, "decoder_layers", 3)
-    args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 256)
-    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 256 * 4)
-    args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 4)
-    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 4)
-    args.dropout = getattr(args, "dropout", 0.3)
-    base_architecture(args)
-
-
-@register_model_architecture("s2t_dd_transformer", "s2t_dd_transformer_iwslt_xs_dec")
-def s2t_dd_transformer_iwslt_xs_dec(args):
-    args.encoder_layers = getattr(args, "encoder_layers", 12)
     args.decoder_layers = getattr(args, "decoder_layers", 3)
     args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 256)
     args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 256 * 4)
