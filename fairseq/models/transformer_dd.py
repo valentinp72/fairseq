@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import math
+import random
 from typing import Any, Dict, List, Optional, Tuple
 import logging
 
@@ -210,8 +211,18 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         self._future_mask_dual = (torch.empty(0), torch.empty(0))
         self.subtasks = getattr(args, "subtasks", None)
         self.merge_operator = getattr(args, "merge_operator", None)
-        self.wait_k_asr = getattr(args, "wait_k_asr", 0)
-        self.wait_k_st = getattr(args, "wait_k_st", 0)
+        wait_k = getattr(args, "wait_k", "0")
+        wait_k = wait_k.replace("[", "").replace("]", "").split(":")
+        assert len(wait_k) <= 3
+        if len(wait_k) == 1:
+            self.wait_k = int(wait_k[0])
+        else:
+            start, stop = int(wait_k[0]), int(wait_k[1])
+            step = 1 if len(wait_k) == 2 else int(wait_k[-1])
+            wait_k = [k for k in range(start, stop, step)]
+            self.wait_k = wait_k
+        logging.info(f'self.wait_k: {self.wait_k}')
+
         self.dual_lang_pairs = getattr(args, "dual_lang_pairs", None)
         self.lang_token_ids = {
             i: s
@@ -576,27 +587,14 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
             self._future_mask = tuple(_future_mask_tmp)
             return tuple([self._future_mask[i][:dim[i], :dim[i]] for i in range(ntask)])
         else:
-            if self.wait_k_asr == 0 and self.wait_k_st == 0:
-                for i in range(ntask):
-                    _future_mask_tmp[i] = torch.triu(
-                        utils.fill_with_neg_inf(torch.zeros([dim[i], dim[1-i]])), 1
+            wait_k = random.choice(self.wait_k) if isinstance(self.wait_k, list) else self.wait_k
+            for i in range(ntask):
+                diagonal = 1 if wait_k==0 else -wait_k if i == 0 else wait_k
+                _future_mask_tmp[i] = torch.triu(
+                        utils.fill_with_neg_inf(torch.zeros([dim[i], dim[1-i]])),
+                        diagonal=diagonal
                     )
-                    _future_mask_tmp[i] = _future_mask_tmp[i].to(tuple_tensor[i])
-            # elif self.wait_k_asr > 0:
-            #     for i in range(ntask):
-            #         _future_mask_tmp[i] = torch.triu(
-            #             utils.fill_with_neg_inf(torch.zeros([dim[i], dim[1-i]])), 
-            #             -self.wait_k_asr if i == 0 else self.wait_k_asr
-            #         )
-            #         # logging.info(f'_future_mask_tmp[{i}]: {_future_mask_tmp[i]}')
-            #         _future_mask_tmp[i] = _future_mask_tmp[i].to(tuple_tensor[i])
-            # elif self.wait_k_st > 0:
-            #     for i in range(ntask):
-            #         _future_mask_tmp[i] = torch.triu(
-            #             utils.fill_with_neg_inf(torch.zeros([dim[i], dim[1-i]])), 
-            #             self.wait_k_st if i == 0 else -self.wait_k_st
-            #         )
-            #         _future_mask_tmp[i] = _future_mask_tmp[i].to(tuple_tensor[i])
+                _future_mask_tmp[i] = _future_mask_tmp[i].to(tuple_tensor[i])
 
             self._future_mask_dual = tuple(_future_mask_tmp)
             return tuple([self._future_mask_dual[i][:dim[i], :dim[1-i]] for i in range(ntask)])

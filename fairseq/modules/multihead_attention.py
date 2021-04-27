@@ -478,6 +478,7 @@ class MultiheadAttention(FairseqIncrementalDecoder):
         attn_mask: Optional[Tensor] = None,
         before_softmax: bool = False,
         need_head_weights: bool = False,
+        wait_k: bool = False,
     ) -> Tuple[Tensor, Optional[Tensor]]:
         """Input shape: Time x Batch x Channel
 
@@ -721,9 +722,17 @@ class MultiheadAttention(FairseqIncrementalDecoder):
         if before_softmax:
             return attn_weights, v
 
+        # If an entire row of attn_weights is -inf, then
+        not_attn_mask = torch.isinf(attn_weights)
+        # Non-attendable rows
+        rows_no_attend = torch.all(not_attn_mask, dim=-1)
+        rows_no_attend = rows_no_attend.unsqueeze(-1).repeat(1, 1, attn_weights.shape[-1])
+        attn_weights[rows_no_attend] = 0     
         attn_weights_float = utils.softmax(
             attn_weights, dim=-1, onnx_trace=self.onnx_trace
         )
+        # Reset non-attendable rows to 0
+        attn_weights_float = attn_weights_float.masked_fill(not_attn_mask, 0.0)
         attn_weights = attn_weights_float.type_as(attn_weights)
         attn_probs = self.dropout_module(attn_weights)
 

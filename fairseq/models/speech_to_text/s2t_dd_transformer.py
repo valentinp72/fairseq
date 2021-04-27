@@ -60,10 +60,9 @@ class S2TDualDecoderTransformerModel(FairseqEncoderDecoderModel):
                             help="Position of the dual-attention module")
         parser.add_argument('--merge-sum-weight-init', type=float, metavar='D', default=0.0,
                             help="Init weight for sum merging operator")
-        parser.add_argument('--wait-k-asr', default=0, type=int,
-                            help="ASR decoder is k steps ahead of ST decoder.")
-        parser.add_argument('--wait-k-st', default=0, type=int,
-                            help="ST decoder is k steps ahead of ASR decoder.")
+        parser.add_argument('--wait-k', default="0", type=str, metavar='STR',
+                            help="[start:stop:step] for k, which is the number of steps \
+                                that ASR decoder is ahead of ST decoder.")
         parser.add_argument('--dual-attn-lang', action="store_true",
                             help="Use language-specific dual-attn layers.")
         parser.add_argument('--dual-lang-pairs', type=str, default=None,

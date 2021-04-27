@@ -322,6 +322,7 @@ class TransformerDualDecoderLayer(nn.Module):
                     incremental_state=incremental_state[i],
                     need_weights=False,
                     attn_mask=dual_attn_mask[i],
+                    wait_k=True,
                 )
                 if self.merge_operator == "sum":
                     x_tmp[i] = x[i] + self.merge_sum_weight_self[task] * z
@@ -352,8 +353,6 @@ class TransformerDualDecoderLayer(nn.Module):
                     saved_state["prev_key_padding_mask"] = prev_attn_state[2]
                 assert incremental_state is not None
                 self.encoder_attn._set_input_buffer(incremental_state, saved_state)
-                logging.info(f'saved_state: {saved_state}')
-                logging.info(f'incremental_state: {incremental_state}')
 
             x_tmp, attn_tmp = [None] * ntask, [None] * ntask
             for i, task in enumerate(self.subtasks):
@@ -381,6 +380,7 @@ class TransformerDualDecoderLayer(nn.Module):
                         incremental_state=incremental_state[i],
                         need_weights=False,
                         attn_mask=dual_attn_mask[i],
+                        wait_k=True,
                     )
                     if self.merge_operator == "sum":
                         x_tmp[i] = x[i] + self.merge_sum_weight_source[task] * z
