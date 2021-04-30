@@ -612,6 +612,11 @@ class SequenceGeneratorIndependent(SequenceGenerator):
                 lprobs[i][:, self.pad] = -math.inf  # never select pad
                 lprobs[i][:, self.unk] -= self.unk_penalty  # apply unk penalty
 
+                if step > prefix_tokens[i].size(1):
+                    for t in self.symbols_to_strip_from_output:
+                        if t != self.eos:
+                            lprobs[i][:, t] = -math.inf  # never select language token id
+
                 # handle max length constraint
                 if step >= max_len:
                     lprobs[i][:, : self.eos] = -math.inf
@@ -1144,6 +1149,11 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 lprobs[i][:, self.pad] = -math.inf  # never select pad
                 lprobs[i][:, self.unk] -= self.unk_penalty  # apply unk penalty
 
+                if step > prefix_tokens[i].size(1):
+                    for t in self.symbols_to_strip_from_output:
+                        if t != self.eos:
+                            lprobs[i][:, t] = -math.inf  # never select language token id
+
                 # handle max length constraint
                 if step >= max_len:
                     lprobs[i][:, : self.eos] = -math.inf
@@ -1325,6 +1335,10 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 tokens[i][:, : step + 1] = torch.index_select(
                     tokens[i][:, : step + 1], dim=0, index=active_bbsz_idx
                 )
+                # Force subsequent tokens to be EOS if previous tokens are EOS
+                if step > 0:
+                    _eos_mask_i = tokens[i].view(bsz, beam_size, -1)[:, :, step] == self.eos
+                    cand_indices[i].view(bsz, beam_size, -1)[_eos_mask_i] = self.eos
                 # Select the next token for each of them
                 tokens[i].view(bsz, beam_size, -1)[:, :, step + 1] = torch.gather(
                     cand_indices[i], dim=1, index=active_hypos
