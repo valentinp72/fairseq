@@ -1042,16 +1042,20 @@ class GenerationConfig(FairseqDataclass):
     single_joint_beam: bool = field(
     independent_beams: bool = field(
         default=False, 
-        metadata={"help": "Single joint beam strategy used in dual-decoder Transformer"},
+        metadata={"help": "Independent beams used in dual-decoder Transformer"},
     )
     dual_beams: bool = field(
         default=False, 
-        metadata={"help": "Single joint beam strategy used in dual-decoder Transformer"},
+        metadata={"help": "Single joint beam used in dual-decoder Transformer"},
     )
     waitk: int = field(
         default=0, 
         metadata={"help": "Wait-k decoding strategy where one decoder is k steps \
                 ahead of the other decoder"},
+    )
+    waitk_ensemble: bool = field(
+        default=False, 
+        metadata={"help": "Use ensemble of different values for waitk."},
     )
 
 

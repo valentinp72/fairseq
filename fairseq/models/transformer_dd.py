@@ -219,7 +219,7 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         else:
             start, stop = int(wait_k[0]), int(wait_k[1])
             step = 1 if len(wait_k) == 2 else int(wait_k[-1])
-            wait_k = [k for k in range(start, stop, step)]
+            wait_k = list(range(start, stop, step))
             self.wait_k = wait_k
         logging.info(f'self.wait_k: {self.wait_k}')
 

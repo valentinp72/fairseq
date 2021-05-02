@@ -502,6 +502,7 @@ class FairseqTask(object):
                 seq_gen_cls = SequenceGeneratorDualBeam
                 search_strategy = search.DualBeamSearch(self.target_dictionary)
                 extra_gen_cls_kwargs["waitk"] = getattr(args, "waitk", 0)
+                extra_gen_cls_kwargs["waitk_ensemble"] = getattr(args, "waitk_ensemble", False)
             else:
                 seq_gen_cls = SequenceGenerator
 

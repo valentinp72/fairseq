@@ -983,7 +983,8 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
             match_source_len (bool, optional): outputs should match the source
                 length (default: False)
         """
-        self.waitk = int(kwargs.pop('waitk', 0))
+        self.waitk = int(kwargs.pop("waitk", 0))
+        self.waitk_ensemble = int(kwargs.pop("waitk_ensemble", False))
 
         super().__init__(models, tgt_dict, **kwargs)
         if isinstance(models, EnsembleModelDD):
@@ -1147,7 +1148,36 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 incremental_states,
                 self.temperature,
             )
-            lprobs = list(lprobs)
+
+            if self.waitk_ensemble and self.waitk != 0:
+                # If ST waits for ASR: waits[0] = 0, waits[1] = self.waitk > 0
+                iwait = 1 if self.waitk > 0 else 0
+                all_lprobs_iwait = [lprobs[iwait]]
+                if avg_attn_scores is not None:
+                    all_avg_attn_scores_iwait = [avg_attn_scores[iwait]]
+                if step >= waits[iwait] + prefix_tokens[iwait].size(1):
+                    for k in range(waits[iwait]):
+                        logging.info(f'ensemble with k = {k}...')
+                        tokens_iwait = tokens[iwait][:, waits[iwait] : step + 1]
+                        tokens_other = tokens[1-iwait][:, waits[1-iwait] : step + 1 - k - 1]
+                        _tokens = [None, None]
+                        _tokens[iwait] = tokens_iwait
+                        _tokens[1-iwait] = tokens_other
+                        _lprobs, _avg_attn_scores = self.model.forward_decoder(
+                            _tokens,
+                            encoder_outs,
+                            incremental_states,
+                            self.temperature,
+                        )
+                        all_lprobs_iwait.append(_lprobs[iwait])
+                        if avg_attn_scores is not None:
+                            all_avg_attn_scores_iwait.append(_avg_attn_scores[iwait])
+                    lprobs[iwait] = (torch.logsumexp(torch.stack(all_lprobs_iwait, dim=0), dim=0)
+                                        - math.log(waits[iwait]))
+                    if avg_attn_scores is not None:
+                        avg_attn_scores[iwait] = (torch.logsumexp(torch.stack(all_avg_attn_scores_iwait, dim=0), dim=0)
+                                        - math.log(waits[iwait]))
+
             if self.lm_model is not None:
                 lm_out = []
                 probs = []
