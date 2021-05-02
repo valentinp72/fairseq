@@ -1141,7 +1141,8 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                                                 encoder_outs, reorder_state
                                             )
             lprobs, avg_attn_scores = self.model.forward_decoder(
-                [tokens[i][:, : step + 1] for i in range(2)],
+                [tokens[i][:, : step + 1] if step < waits[i] else 
+                tokens[i][:, waits[i] : step + 1] for i in range(2)],
                 encoder_outs,
                 incremental_states,
                 self.temperature,
