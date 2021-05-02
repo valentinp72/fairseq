@@ -242,6 +242,8 @@ class SpeechToTextTask(LegacyFairseqTask):
             for s, i in self.tgt_dict.indices.items()
             if SpeechToTextDataset.is_lang_tag(s)
         }
+        if args.subtasks is not None:
+            lang_token_ids.add(self.tgt_dict.pad()) # remove padding
         logging.info(f'symbols_to_strip_from_output: {lang_token_ids}')
         extra_gen_cls_kwargs = {"symbols_to_strip_from_output": lang_token_ids}
         return super().build_generator(

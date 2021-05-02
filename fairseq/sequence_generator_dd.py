@@ -638,6 +638,7 @@ class SequenceGeneratorIndependent(SequenceGenerator):
                 # If one (and only one) previous hypothesis (between ASR and ST)
                 # was EOS, then force the subsequent tokens to be EOS as well
                 if step > 0:
+                    # logging.info(f'tokens[{i}]:\n{tokens[i][:, step-5:step+1]}')
                     _eos_mask = tokens[i][:, step] == self.eos
                     if torch.any(_eos_mask):
                         lprobs[i][_eos_mask, : self.eos] = -math.inf
@@ -982,11 +983,15 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
             match_source_len (bool, optional): outputs should match the source
                 length (default: False)
         """
+        self.waitk = int(kwargs.pop('waitk', 0))
+
         super().__init__(models, tgt_dict, **kwargs)
         if isinstance(models, EnsembleModelDD):
             self.model = models
         else:
             self.model = EnsembleModelDD(models)
+        self.model.eval()   
+        logging.info(f'*** waitk = {self.waitk} ***')
 
     def _generate(
         self,
@@ -1002,6 +1007,16 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 for i in range(self.model.models_size)
             ],
         )
+
+        if self.waitk > 0:
+            # The second decoder waits for the first
+            waits = [0, self.waitk]
+        elif self.waitk < 0:
+            # The first decoder waits for the second
+            waits = [-self.waitk, 0]
+        else:
+            waits = [0, 0]
+
         net_input = sample["net_input"]
 
         if "src_tokens" in net_input:
@@ -1058,7 +1073,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
 
         # initialize buffers
         scores = (
-            torch.zeros(bsz * beam_size, max_len + 1).to(src_tokens).float()
+            torch.zeros(2, bsz * beam_size, max_len + 1).to(src_tokens).float()
         )  # +1 for eos; pad is never chosen for scoring 
             
         tokens = [torch.zeros(bsz * beam_size, max_len + 2)
@@ -1149,35 +1164,40 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 lprobs[i][:, self.pad] = -math.inf  # never select pad
                 lprobs[i][:, self.unk] -= self.unk_penalty  # apply unk penalty
 
-                if step > prefix_tokens[i].size(1):
-                    for t in self.symbols_to_strip_from_output:
-                        if t != self.eos:
-                            lprobs[i][:, t] = -math.inf  # never select language token id
-
                 # handle max length constraint
                 if step >= max_len:
                     lprobs[i][:, : self.eos] = -math.inf
                     lprobs[i][:, self.eos + 1 :] = -math.inf
 
                 # handle prefix tokens (possibly with different lengths)
+                # if a decoder waits k steps, then we preprend with k EOS
+                # before appending the prefix_tokens
                 if (
                     prefix_tokens[i] is not None
-                    and step < prefix_tokens[i].size(1)
+                    and step >= waits[i]
+                    and step < prefix_tokens[i].size(1) + waits[i]
                     and step < max_len
                 ):
-                    lprobs[i], tokens[i], scores = self._prefix_tokens(
-                        step, lprobs[i], scores, tokens[i], prefix_tokens[i], beam_size
+                    lprobs[i], tokens[i], scores[i] = self._prefix_tokens(
+                        step - waits[i], lprobs[i], scores[i], tokens[i], prefix_tokens[i], beam_size
                     )
                 elif step < self.min_len:
                     # minimum length constraint (does not apply if using prefix_tokens)
                     lprobs[i][:, self.eos] = -math.inf
 
+                if step < waits[i]:
+                    lprobs[i][:, : self.pad] = -math.inf
+                    lprobs[i][:, self.pad] = 0.0
+                    lprobs[i][:, self.pad + 1 :] = -math.inf
+
                 # If one (and only one) previous hypothesis (between ASR and ST)
                 # was EOS, then force the subsequent tokens to be EOS as well
-                if step > 0:
+                if step > waits[i] + prefix_tokens[i].size(1):
+                    # logging.info(f'step {step} - tokens[{i}]:\n{tokens[i][:, max(0,step-5):step+1]}')
                     _eos_mask = tokens[i][:, step] == self.eos
                     if torch.any(_eos_mask):
                         lprobs[i][_eos_mask, : self.eos] = -math.inf
+                        lprobs[i][_eos_mask, self.eos] = 0.0
                         lprobs[i][_eos_mask, self.eos + 1 :] = -math.inf
 
                 # Record attention scores, only support avg_attn_scores is a Tensor
@@ -1202,7 +1222,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
             if self.repeat_ngram_blocker is not None:
                 lprobs = self.repeat_ngram_blocker(tokens, lprobs, bsz, beam_size, step)
 
-            # Shape: (batch, cand_size)
+            # cand_scores, cand_indices: (2, batch, cand_size), cand_beams: (batch, cand_size)
             cand_scores, cand_indices, cand_beams = self.search.step(
                 step,
                 [lprobs[i].view(bsz, -1, self.vocab_size) for i in range(2)],
@@ -1218,7 +1238,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
             
             # finalize hypotheses that end in eos
             # Shape of eos_mask: (batch size, cand_size)
-            eos_mask = [cand_indices[i].eq(self.eos) & cand_scores.ne(-math.inf) for i in range(2)]
+            eos_mask = [cand_indices[i].eq(self.eos) & cand_scores[i].ne(-math.inf) for i in range(2)]
             eos_mask = eos_mask[0] & eos_mask[1]
             eos_mask[:, :beam_size][cands_to_ignore] = torch.tensor(0).to(eos_mask)
 
@@ -1229,17 +1249,21 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 cand_bbsz_idx[:, :beam_size], mask=eos_mask[:, :beam_size]
             )
 
+            # Use the join (sum) scores for the joint beam
+            join_scores = torch.sum(scores, dim=0)
+            join_cand_scores = torch.sum(cand_scores, dim=0)
+
             finalized_sents: List[int] = []
             if eos_bbsz_idx.numel() > 0:
                 eos_scores = torch.masked_select(
-                    cand_scores[:, :beam_size], mask=eos_mask[:, :beam_size]
+                    join_cand_scores[:, :beam_size], mask=eos_mask[:, :beam_size]
                 )
                 finalized_sents = self.finalize_hypos(
                     step,
                     eos_bbsz_idx,
                     eos_scores,
                     tokens,
-                    scores,
+                    join_scores,
                     finalized,
                     finished,
                     beam_size,
@@ -1278,7 +1302,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 cand_beams = cand_beams[batch_idxs]
                 bbsz_offsets.resize_(new_bsz, 1)
                 cand_bbsz_idx = cand_beams.add(bbsz_offsets)
-                cand_scores = cand_scores[batch_idxs]
+                cand_scores = cand_scores[:, batch_idxs, :]
                 cand_indices = [cand_indices[i][batch_idxs] for i in range(2)]
 
                 if prefix_tokens[0] is not None and prefix_tokens[1] is not None:
@@ -1286,7 +1310,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 src_lengths = src_lengths[batch_idxs]
                 cands_to_ignore = cands_to_ignore[batch_idxs]
 
-                scores = scores.view(bsz, -1)[batch_idxs].view(new_bsz * beam_size, -1)
+                scores = scores.view(2, bsz, -1)[:, batch_idxs, :].view(2, new_bsz * beam_size, -1)
                 tokens = [tokens[i].view(bsz, -1)[batch_idxs].view(new_bsz * beam_size, -1) for i in range(2)]
                 if None not in attn:
                     attn = [attn[i].view(bsz, -1)[batch_idxs].view(
@@ -1323,10 +1347,10 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
             # {active_bbsz_idx} denotes which beam number is continued for each new hypothesis (a beam
             # can be selected more than once).
             active_bbsz_idx = torch.gather(cand_bbsz_idx, dim=1, index=active_hypos)
-            active_scores = torch.gather(cand_scores, dim=1, index=active_hypos)
+            # active_scores = torch.gather(cand_scores, dim=1, index=active_hypos)
 
             active_bbsz_idx = active_bbsz_idx.view(-1)
-            active_scores = active_scores.view(-1)
+            # active_scores = active_scores.view(-1)
 
             # copy tokens and scores for active hypotheses
 
@@ -1335,20 +1359,16 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 tokens[i][:, : step + 1] = torch.index_select(
                     tokens[i][:, : step + 1], dim=0, index=active_bbsz_idx
                 )
-                # Force subsequent tokens to be EOS if previous tokens are EOS
-                if step > 0:
-                    _eos_mask_i = tokens[i].view(bsz, beam_size, -1)[:, :, step] == self.eos
-                    cand_indices[i].view(bsz, beam_size, -1)[_eos_mask_i] = self.eos
                 # Select the next token for each of them
                 tokens[i].view(bsz, beam_size, -1)[:, :, step + 1] = torch.gather(
                     cand_indices[i], dim=1, index=active_hypos
                 )
             if step > 0:
-                scores[:, :step] = torch.index_select(
-                    scores[:, :step], dim=0, index=active_bbsz_idx
+                scores[:, :, :step] = torch.index_select(
+                    scores[:, :, :step], dim=1, index=active_bbsz_idx
                 )
-            scores.view(bsz, beam_size, -1)[:, :, step] = torch.gather(
-                cand_scores, dim=1, index=active_hypos
+            scores.view(2, bsz, beam_size, -1)[:, :, :, step] = torch.gather(
+                cand_scores, dim=2, index=active_hypos.unsqueeze(0).repeat(2, 1, 1)
             )
 
             # Update constraints based on which candidates were selected for the next beam

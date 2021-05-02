@@ -1048,6 +1048,11 @@ class GenerationConfig(FairseqDataclass):
         default=False, 
         metadata={"help": "Single joint beam strategy used in dual-decoder Transformer"},
     )
+    waitk: int = field(
+        default=0, 
+        metadata={"help": "Wait-k decoding strategy where one decoder is k steps \
+                ahead of the other decoder"},
+    )
 
 
 @dataclass

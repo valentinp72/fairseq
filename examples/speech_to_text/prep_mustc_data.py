@@ -262,13 +262,14 @@ def process_joint(args):
             df = load_df_from_tsv(tsv_path)
             for t in df["tgt_text"]:
                 f.write(t + "\n")
-            if args.joint_asr_st and lang == "fr": # based on number of sentences 
+            # get transcriptions from the pair having the most number of sentences
+            if args.joint_asr_st and lang == "fr": 
                 for t in df["src_text"]:
                     f.write(t + "\n")
         special_symbols = None
         if args.task == 'st':
             special_symbols = [f'<lang:{lang}>' for lang in MUSTC.LANGUAGES] \
-                if not args.joint_asr_st else [f'<lang:{lang}>' for lang in MUSTC.LANGUAGES+["en"]]
+                if not args.joint_asr_st else [f'<lang:{lang}>' for lang in MUSTC.LANGUAGES + ["en"]]
         gen_vocab(
             Path(f.name),
             cur_root / spm_filename_prefix,

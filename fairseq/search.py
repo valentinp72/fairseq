@@ -934,6 +934,7 @@ class DualBeamSearch_independent(Search):
         # Project back into relative indices and beams
         beams_buf = [indices_buf[i] // vocab_size for i in range(2)]
         indices_buf = [indices_buf[i].fmod(vocab_size) for i in range(2)]
+        logging.info(f'scores_buf normalized:\n{scores_buf}')
 
         # At this point, beams_buf and indices_buf are single-dim and contain relative indices
         return scores_buf, indices_buf, beams_buf
@@ -999,6 +1000,24 @@ class DualBeamSearch_inefficient(Search):
         return scores_buf, indices_buf, beams_buf
 
 
+def gather2D(x, idx1, idx2):
+    """Compute y such that: y[i, j] = x[i, idx1[i,j], idx2[i,j]]
+    https://discuss.pytorch.org/t/similar-to-torch-gather-over-two-dimensions/118827/3
+    x: N x B x V
+        idx1: N x K matrix where idx1[i, j] is between [0, B)
+        idx2: N x K matrix where idx2[i, j] is between [0, V)
+    Return:
+        y: N x K matrix where y[i, j] = x[i, idx1[i,j], idx2[i,j]]
+    """
+    # Linearize the last two dims and index in a contiguous x
+    x = x.contiguous()
+
+    lin_idx = idx2 + x.size(-1) * idx1
+    x = x.view(-1, x.size(1) * x.size(2))
+
+    return x.gather(-1, lin_idx)
+
+
 class DualBeamSearch(Search):
     def __init__(self, tgt_dict):
         super().__init__(tgt_dict)
@@ -1033,7 +1052,8 @@ class DualBeamSearch(Search):
         else:
             # make probs contain cumulative scores for each hypothesis
             assert scores is not None
-            lprobs = lprobs + scores.view(bsz, beam_size, -1).unsqueeze(0)[:, :, :, step - 1].unsqueeze(-1)
+            # lprobs = lprobs + scores.view(bsz, beam_size, -1).unsqueeze(0)[:, :, :, step - 1].unsqueeze(-1)
+            lprobs = lprobs + scores.view(2, bsz, beam_size, -1)[:, :, :, step-1].unsqueeze(-1)
 
         top_predictions = torch.topk(lprobs, k=min(K, vocab_size - 1))
         
@@ -1043,15 +1063,21 @@ class DualBeamSearch(Search):
         ixk = top_predictions[1][0]
         yk = top_predictions[0][1]
         iyk = top_predictions[1][1]
+        # logging.info(f'xk:\n{xk}')
+        # logging.info(f'ixk:\n{ixk}')
+        # logging.info(f'yk:\n{yk}')
+        # logging.info(f'iyk:\n{iyk}')
 
         assert xk.shape == (bsz, B, K) and ixk.shape == (bsz, B, K)
 
-        scores = (torch.matmul(xk.unsqueeze(-1), torch.ones_like(xk).unsqueeze(-2)) * 0.1
+        scores = (torch.matmul(xk.unsqueeze(-1), torch.ones_like(xk).unsqueeze(-2)) 
                 + torch.matmul(torch.ones_like(yk).unsqueeze(-1), yk.unsqueeze(-1).transpose(-1,-2)))
 
         # Top k of N x BK^2 tensor
         # scores: N x K, inds: N x K
         scores, inds = torch.topk(scores.view(bsz, -1), k=K)
+        # logging.info(f'scores:\n{scores}')
+        # logging.info(f'scores normalized:\n{scores - xmax - ymax}')
 
         # Convert back to the indices in the B x B pairwise score matrices
         # N x K
@@ -1072,20 +1098,15 @@ class DualBeamSearch(Search):
         # This is faster than the above for loop but still not optimal
         # subbeam1_vocab_indices = torch.einsum('iij->ij', ixk[:,beam_indices,subbeam1_indices])
         # subbeam2_vocab_indices = torch.einsum('iij->ij', iyk[:,beam_indices,subbeam2_indices])
+        subbeam1_vocab_indices = gather2D(ixk, beam_indices, subbeam1_indices)
+        subbeam2_vocab_indices = gather2D(iyk, beam_indices, subbeam2_indices)
 
-        # Linearize the last two dims and index in a contiguous x
-        ixk = ixk.contiguous()
-        lin_idx = subbeam1_indices + ixk.size(-1) * beam_indices
-        ixk = ixk.view(-1, ixk.size(1) * ixk.size(2))
-        subbeam1_vocab_indices = ixk.gather(-1, lin_idx)
-
-        iyk = iyk.contiguous()
-        lin_idx = subbeam2_indices + iyk.size(-1) * beam_indices
-        iyk = iyk.view(-1, iyk.size(1) * iyk.size(2))
-        subbeam2_vocab_indices = iyk.gather(-1, lin_idx)
-
-        scores_buf = scores
-        indices_buf = [subbeam1_vocab_indices, subbeam2_vocab_indices]
+        # scores_buf = scores
+        # scores_buf[0][i, j] = lprobs[0][i, beam_indices[i, j], subbeam1_vocab_indices[i, j]]
+        scores_buf = torch.stack([gather2D(lprobs[0], beam_indices, subbeam1_vocab_indices), 
+                                  gather2D(lprobs[1], beam_indices, subbeam2_vocab_indices)])
+        # logging.info(f'scores_buf: {scores_buf.shape}\n{scores_buf}')
+        indices_buf = torch.stack([subbeam1_vocab_indices, subbeam2_vocab_indices])
         beams_buf = beam_indices
 
         # At this point, beams_buf and indices_buf are single-dim and contain relative indices
