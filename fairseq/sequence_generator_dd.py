@@ -985,6 +985,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
         """
         self.waitk = int(kwargs.pop("waitk", 0))
         self.waitk_ensemble = int(kwargs.pop("waitk_ensemble", False))
+        self.weight_score = float(kwargs.pop("weight_score", 0.5))
 
         super().__init__(models, tgt_dict, **kwargs)
         if isinstance(models, EnsembleModelDD):
@@ -1157,7 +1158,6 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                     all_avg_attn_scores_iwait = [avg_attn_scores[iwait]]
                 if step >= waits[iwait] + prefix_tokens[iwait].size(1):
                     for k in range(waits[iwait]):
-                        logging.info(f'ensemble with k = {k}...')
                         tokens_iwait = tokens[iwait][:, waits[iwait] : step + 1]
                         tokens_other = tokens[1-iwait][:, waits[1-iwait] : step + 1 - k - 1]
                         _tokens = [None, None]
@@ -1260,6 +1260,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 scores,
                 [tokens[i][:, : step + 1] for i in range(2)],
                 original_batch_idxs,
+                self.weight_score,
             )
 
             # cand_bbsz_idx contains beam indices for the top candidate

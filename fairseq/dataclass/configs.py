@@ -1057,6 +1057,10 @@ class GenerationConfig(FairseqDataclass):
         default=False, 
         metadata={"help": "Use ensemble of different values for waitk."},
     )
+    weight_score: float = field(
+        default=0.5, 
+        metadata={"help": "Weight of sum of scores in dual-beams."},
+    )
 
 
 @dataclass

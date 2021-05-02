@@ -1031,7 +1031,8 @@ class DualBeamSearch(Search):
         scores: Optional[Tensor],
         prev_output_tokens: Optional[Tensor] = None,
         original_batch_idxs: Optional[Tensor] = None,
-        ):
+        weight_score: Optional[float] = 0.5,
+    ):
         if isinstance(lprobs, list) or isinstance(lprobs, tuple):
             lprobs = torch.stack(lprobs)
         # if isinstance(scores, list) or isinstance(scores, tuple):
@@ -1070,8 +1071,8 @@ class DualBeamSearch(Search):
 
         assert xk.shape == (bsz, B, K) and ixk.shape == (bsz, B, K)
 
-        scores = (torch.matmul(xk.unsqueeze(-1), torch.ones_like(xk).unsqueeze(-2)) 
-                + torch.matmul(torch.ones_like(yk).unsqueeze(-1), yk.unsqueeze(-1).transpose(-1,-2)))
+        scores = (weight_score * torch.matmul(xk.unsqueeze(-1), torch.ones_like(xk).unsqueeze(-2)) 
+                + (1 - weight_score) * torch.matmul(torch.ones_like(yk).unsqueeze(-1), yk.unsqueeze(-1).transpose(-1,-2)))
 
         # Top k of N x BK^2 tensor
         # scores: N x K, inds: N x K
