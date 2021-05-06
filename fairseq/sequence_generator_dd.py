@@ -984,8 +984,27 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 length (default: False)
         """
         self.waitk = int(kwargs.pop("waitk", 0))
-        self.waitk_ensemble = int(kwargs.pop("waitk_ensemble", False))
         self.weight_score = float(kwargs.pop("weight_score", 0.5))
+        self.asr_diverse_width = int(kwargs.pop("asr_diverse_width", 0))
+        waitk_ensemble = kwargs.pop("waitk_ensemble", "")
+        waitk_ensemble = None if len(waitk_ensemble)==0 else waitk_ensemble
+        if waitk_ensemble is not None:
+            waitk_ensemble = waitk_ensemble.split(":")
+            assert len(waitk_ensemble) > 1
+            start, stop = int(waitk_ensemble[0]), int(waitk_ensemble[1])
+            step = 1 if len(waitk_ensemble) == 2 else int(waitk_ensemble[-1])
+            waitk_ensemble = list(range(start, stop, step))
+        self.waitk_ensemble = waitk_ensemble
+
+        assert self.waitk_ensemble is None or isinstance(self.waitk_ensemble, list)
+        if self.waitk != 0 and self.waitk_ensemble:
+            raise ValueError(f"waitk and waitk_ensemble must be mutually exclusive!")
+        if self.waitk_ensemble:
+            logging.info(f'*** waitk_ensemble: {self.waitk_ensemble}')
+            m = min(self.waitk_ensemble)
+            M = max(self.waitk_ensemble)
+            if m*M < 0:
+                raise ValueError(f"elements of waitk_ensemble must have the same sign!")
 
         super().__init__(models, tgt_dict, **kwargs)
         if isinstance(models, EnsembleModelDD):
@@ -1009,7 +1028,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 for i in range(self.model.models_size)
             ],
         )
-
+            
         if self.waitk > 0:
             # The second decoder waits for the first
             waits = [0, self.waitk]
@@ -1017,7 +1036,14 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
             # The first decoder waits for the second
             waits = [-self.waitk, 0]
         else:
-            waits = [0, 0]
+            if not self.waitk_ensemble:
+                waits = [0, 0]
+            else:
+                waitk_abs = [abs(x) for x in self.waitk_ensemble]
+                if min(self.waitk_ensemble) < 0: # ASR waits for ST
+                    waits = [max(waitk_abs), 0]
+                else: # ST waits for k steps of ASR (k can be 0 here)
+                    waits = [0, max(waitk_abs)]
 
         net_input = sample["net_input"]
 
@@ -1055,8 +1081,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
             max_len = src_lengths.max().item()
         else:
             max_len = min(
-                int(self.max_len_a * src_len),
-                self.max_len_b,
+                int(self.max_len_a * src_len + self.max_len_b),
                 # exclude the EOS marker
                 self.model.max_decoder_positions() - 1,
             )
@@ -1149,17 +1174,20 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 incremental_states,
                 self.temperature,
             )
+            # logging.info(f'step {step} lprobs[1] at k={waits[i]}: {torch.topk(lprobs[1], k=5)[1]}')
 
-            if self.waitk_ensemble and self.waitk != 0:
+            if self.waitk_ensemble:
                 # If ST waits for ASR: waits[0] = 0, waits[1] = self.waitk > 0
-                iwait = 1 if self.waitk > 0 else 0
+                iwait = 0 if waits[0] > 0 else 1
                 all_lprobs_iwait = [lprobs[iwait]]
                 if avg_attn_scores is not None:
                     all_avg_attn_scores_iwait = [avg_attn_scores[iwait]]
                 if step >= waits[iwait] + prefix_tokens[iwait].size(1):
-                    for k in range(waits[iwait]):
+                    for k in waitk_abs:
+                        if k == waits[iwait]:
+                            continue
                         tokens_iwait = tokens[iwait][:, waits[iwait] : step + 1]
-                        tokens_other = tokens[1-iwait][:, waits[1-iwait] : step + 1 - k - 1]
+                        tokens_other = tokens[1-iwait][:, waits[1-iwait] : step + 1 - (waits[iwait] - k)]
                         _tokens = [None, None]
                         _tokens[iwait] = tokens_iwait
                         _tokens[1-iwait] = tokens_other
@@ -1169,6 +1197,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                             incremental_states,
                             self.temperature,
                         )
+                        # logging.info(f'- step {step} lprobs[1] at k={k}: {torch.topk(_lprobs[1], k=5)[1]}')
                         all_lprobs_iwait.append(_lprobs[iwait])
                         if avg_attn_scores is not None:
                             all_avg_attn_scores_iwait.append(_avg_attn_scores[iwait])
@@ -1261,6 +1290,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 [tokens[i][:, : step + 1] for i in range(2)],
                 original_batch_idxs,
                 self.weight_score,
+                self.asr_diverse_width,
             )
 
             # cand_bbsz_idx contains beam indices for the top candidate

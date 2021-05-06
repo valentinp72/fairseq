@@ -435,12 +435,12 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         
         dual_attn_names = self.subtasks
         if self.dual_lang_pairs is not None:
+            # if prev_output_tokens[0][:, 1:2].shape[1] != 0:
             src_lang_id = prev_output_tokens[0][:, 1:2][0].item()
             tgt_lang_id = prev_output_tokens[1][:, 1:2][0].item()
             src_lang_key = f'{self.subtasks[0]}_{self.lang_token_ids[src_lang_id]}'
             tgt_lang_key = f'{self.subtasks[1]}_{self.lang_token_ids[tgt_lang_id]}'
             dual_attn_names = [src_lang_key, tgt_lang_key]
-            # logging.info(f'dual_attn_names: {dual_attn_names}')
 
         # embed positions
         positions = tuple(

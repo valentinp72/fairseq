@@ -1053,13 +1053,17 @@ class GenerationConfig(FairseqDataclass):
         metadata={"help": "Wait-k decoding strategy where one decoder is k steps \
                 ahead of the other decoder"},
     )
-    waitk_ensemble: bool = field(
-        default=False, 
+    waitk_ensemble: str = field(
+        default="", 
         metadata={"help": "Use ensemble of different values for waitk."},
     )
     weight_score: float = field(
         default=0.5, 
         metadata={"help": "Weight of sum of scores in dual-beams."},
+    )
+    asr_diverse_width: int = field(
+        default=0, 
+        metadata={"help": "Maximum number of diverse tokens in ASR sub-beam."},
     )
 
 

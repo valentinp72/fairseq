@@ -10,6 +10,7 @@ import logging
 
 import torch
 import torch.nn as nn
+from fairseq import utils
 from fairseq.token_generation_constraints import (
     ConstraintState,
     OrderedConstraintState,
@@ -1032,6 +1033,7 @@ class DualBeamSearch(Search):
         prev_output_tokens: Optional[Tensor] = None,
         original_batch_idxs: Optional[Tensor] = None,
         weight_score: Optional[float] = 0.5,
+        asr_diverse_width: Optional[int] = 0,
     ):
         if isinstance(lprobs, list) or isinstance(lprobs, tuple):
             lprobs = torch.stack(lprobs)
@@ -1071,14 +1073,31 @@ class DualBeamSearch(Search):
 
         assert xk.shape == (bsz, B, K) and ixk.shape == (bsz, B, K)
 
+        # (N, B, K, K)
         scores = (weight_score * torch.matmul(xk.unsqueeze(-1), torch.ones_like(xk).unsqueeze(-2)) 
                 + (1 - weight_score) * torch.matmul(torch.ones_like(yk).unsqueeze(-1), yk.unsqueeze(-1).transpose(-1,-2)))
+        if asr_diverse_width > 0:
+            # triangular approach
+            h = asr_diverse_width
+            w = 2 * K // h
+            _m = torch.flip(torch.tril(utils.fill_with_neg_inf(
+                    torch.zeros([h, w])), 1), [1]).unsqueeze(0).unsqueeze(0).to(scores)
+            m = torch.zeros(1, 1, K, K).to(scores)
+            m[:, :, h :, : ] = -math.inf
+            m[:, :, :, w : ] = -math.inf
+            m[:, :, :h, :][:, :, :, :w] += _m
+            scores += m
+
+            # # rectangle approach
+            # h = asr_diverse_width
+            # w = K // h
+            # m = torch.zeros_like(scores) + float("-inf")
+            # m[:, :, :h, :w] = 0.0
+            # scores += m
 
         # Top k of N x BK^2 tensor
         # scores: N x K, inds: N x K
         scores, inds = torch.topk(scores.view(bsz, -1), k=K)
-        # logging.info(f'scores:\n{scores}')
-        # logging.info(f'scores normalized:\n{scores - xmax - ymax}')
 
         # Convert back to the indices in the B x B pairwise score matrices
         # N x K

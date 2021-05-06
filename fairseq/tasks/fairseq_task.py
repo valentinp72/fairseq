@@ -504,6 +504,7 @@ class FairseqTask(object):
                 extra_gen_cls_kwargs["waitk"] = getattr(args, "waitk", 0)
                 extra_gen_cls_kwargs["waitk_ensemble"] = getattr(args, "waitk_ensemble", False)
                 extra_gen_cls_kwargs["weight_score"] = getattr(args, "weight_score", 0.5)
+                extra_gen_cls_kwargs["asr_diverse_width"] = getattr(args, "asr_diverse_width", 0)
             else:
                 seq_gen_cls = SequenceGenerator
 
