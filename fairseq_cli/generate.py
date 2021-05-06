@@ -448,25 +448,21 @@ def _main(cfg: DictConfig, output_file):
                             hypo_tokens = tgt_dict.encode_line(
                                 detok_hypo_str, add_if_not_exist=True
                             )
-                        if hasattr(scorer, "add_string"):
-                            scorer.add_string(target_str, detok_hypo_str)
-                        else:
-                            scorer.add(target_tokens, hypo_tokens)
                     else:
                         if align_dict is not None or cfg.common_eval.post_process is not None:
                             # Convert back to tokens for evaluation with unk replacement and/or without BPE
                             target_tokens = [tgt_dict.encode_line(
                                 target_str[k], add_if_not_exist=True
-                            ) for k in range(num_targets)]
+                                ) for k in range(num_targets)
+                            ]
                             hypo_tokens = [tgt_dict.encode_line(
                                 detok_hypo_str[k], add_if_not_exist=True
-                            ) for k in range(num_targets)]
-                        if hasattr(scorer, "add_string"):
-                            # scorer.add_string(target_str[0], detok_hypo_str[0])
-                            scorer.add_string(target_str[1], detok_hypo_str[1])
-                        else:
-                            # scorer.add(target_tokens[0], hypo_tokens[0])
-                            scorer.add(target_tokens[1], hypo_tokens[1])
+                                ) for k in range(num_targets)
+                            ]
+                    if hasattr(scorer, "add_string"):
+                        scorer.add_string(target_str, detok_hypo_str)
+                    else:
+                        scorer.add(target_tokens, hypo_tokens)
 
         wps_meter.update(num_generated_tokens)
         progress.log({"wps": round(wps_meter.avg)})
