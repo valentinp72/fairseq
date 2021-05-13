@@ -1201,11 +1201,13 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                         all_lprobs_iwait.append(_lprobs[iwait])
                         if avg_attn_scores is not None:
                             all_avg_attn_scores_iwait.append(_avg_attn_scores[iwait])
+                    # debug, take only k=8 for prediction
+                    # lprobs[iwait] = all_lprobs_iwait[-1] # k=10
                     lprobs[iwait] = (torch.logsumexp(torch.stack(all_lprobs_iwait, dim=0), dim=0)
-                                        - math.log(waits[iwait]))
+                                        - math.log(len(all_lprobs_iwait)))
                     if avg_attn_scores is not None:
                         avg_attn_scores[iwait] = (torch.logsumexp(torch.stack(all_avg_attn_scores_iwait, dim=0), dim=0)
-                                        - math.log(waits[iwait]))
+                                        - math.log(len(all_avg_attn_scores_iwait)))
 
             if self.lm_model is not None:
                 lm_out = []
