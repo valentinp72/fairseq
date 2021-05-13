@@ -1040,10 +1040,24 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 waits = [0, 0]
             else:
                 waitk_abs = [abs(x) for x in self.waitk_ensemble]
+                maxk = max(waitk_abs)
                 if min(self.waitk_ensemble) < 0: # ASR waits for ST
-                    waits = [max(waitk_abs), 0]
+                    waits = [maxk, 0]
                 else: # ST waits for k steps of ASR (k can be 0 here)
-                    waits = [0, max(waitk_abs)]
+                    waits = [0, maxk]
+                incremental_states_waitks = {}
+                for k in waitk_abs:
+                    if k == maxk:
+                        continue
+                    incremental_states_waitks[k] = torch.jit.annotate(
+                            List[Dict[str, Dict[str, Optional[Tensor]]]],
+                            [
+                                torch.jit.annotate(Dict[str, Dict[str, Optional[Tensor]]], {})
+                                for i in range(self.model.models_size)
+                            ],
+                        )
+                # If ST waits for ASR: waits[0] = 0, waits[1] = self.waitk > 0
+                iwait = 0 if waits[0] > 0 else 1
 
         net_input = sample["net_input"]
 
@@ -1162,8 +1176,21 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                         corr.unsqueeze(-1) * beam_size
                     )
                     original_batch_idxs = original_batch_idxs[batch_idxs]
-                self.model.reorder_incremental_state([incremental_states[i][0] for i in range(len(incremental_states))], reorder_state)
-                self.model.reorder_incremental_state([incremental_states[i][1] for i in range(len(incremental_states))], reorder_state)
+                self.model.reorder_incremental_state(
+                    [incremental_states[i][0] for i in range(len(incremental_states))], 
+                    reorder_state)
+                self.model.reorder_incremental_state(
+                    [incremental_states[i][1] for i in range(len(incremental_states))], 
+                    reorder_state)
+
+                if self.waitk_ensemble:
+                    if step >= waits[iwait] + prefix_tokens[iwait].size(1):
+                        for k in waitk_abs:
+                            if k == waits[iwait]:
+                                continue
+                            self.model.reorder_incremental_state(
+                                                incremental_states_waitks[k], 
+                                                reorder_state)
                 encoder_outs = self.model.reorder_encoder_out(
                                                 encoder_outs, reorder_state
                                             )
@@ -1177,8 +1204,6 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
             # logging.info(f'step {step} lprobs[1] at k={waits[i]}: {torch.topk(lprobs[1], k=5)[1]}')
 
             if self.waitk_ensemble:
-                # If ST waits for ASR: waits[0] = 0, waits[1] = self.waitk > 0
-                iwait = 0 if waits[0] > 0 else 1
                 all_lprobs_iwait = [lprobs[iwait]]
                 if avg_attn_scores is not None:
                     all_avg_attn_scores_iwait = [avg_attn_scores[iwait]]
@@ -1191,18 +1216,25 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                         _tokens = [None, None]
                         _tokens[iwait] = tokens_iwait
                         _tokens[1-iwait] = tokens_other
+                        incremental_states_k = incremental_states_waitks[k]
+                        _incremental_states = []
+                        for x, y in zip(incremental_states_k, incremental_states):
+                            if iwait == 1:
+                                _incremental_states.append((x, y[1]))
+                            else:
+                                _incremental_states.append((y[0], x))
                         _lprobs, _avg_attn_scores = self.model.forward_decoder(
                             _tokens,
                             encoder_outs,
-                            incremental_states,
+                            _incremental_states,
                             self.temperature,
                         )
                         # logging.info(f'- step {step} lprobs[1] at k={k}: {torch.topk(_lprobs[1], k=5)[1]}')
                         all_lprobs_iwait.append(_lprobs[iwait])
                         if avg_attn_scores is not None:
                             all_avg_attn_scores_iwait.append(_avg_attn_scores[iwait])
-                    # debug, take only k=8 for prediction
-                    # lprobs[iwait] = all_lprobs_iwait[-1] # k=10
+                # debug, take only k=8 for prediction
+                # lprobs[iwait] = all_lprobs_iwait[1]
                     lprobs[iwait] = (torch.logsumexp(torch.stack(all_lprobs_iwait, dim=0), dim=0)
                                         - math.log(len(all_lprobs_iwait)))
                     if avg_attn_scores is not None:
