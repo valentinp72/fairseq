@@ -986,6 +986,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
         self.waitk = int(kwargs.pop("waitk", 0))
         self.weight_score = float(kwargs.pop("weight_score", 0.5))
         self.asr_diverse_width = int(kwargs.pop("asr_diverse_width", 0))
+
         waitk_ensemble = kwargs.pop("waitk_ensemble", "")
         waitk_ensemble = None if len(waitk_ensemble)==0 else waitk_ensemble
         if waitk_ensemble is not None:
@@ -996,21 +997,40 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
             waitk_ensemble = list(range(start, stop, step))
         self.waitk_ensemble = waitk_ensemble
 
+        self.waitk_abs =  None
+        if self.waitk > 0:
+            # The second decoder waits for the first
+            self.waits = [0, self.waitk]
+        elif self.waitk < 0:
+            # The first decoder waits for the second
+            self.waits = [-self.waitk, 0]
+        else:
+            if not self.waitk_ensemble:
+                self.waits = [0, 0]
+            else:
+                self.waitk_abs = [abs(x) for x in self.waitk_ensemble]
+                maxk = max(self.waitk_abs)
+                if min(self.waitk_ensemble) < 0: # ASR waits for ST
+                    self.waits = [maxk, 0]
+                else: # ST waits for k steps of ASR (k can be 0 here)
+                    self.waits = [0, maxk]
+        self.iwait = 0 if self.waits[0] > 0 else 1
+
         assert self.waitk_ensemble is None or isinstance(self.waitk_ensemble, list)
         if self.waitk != 0 and self.waitk_ensemble:
             raise ValueError(f"waitk and waitk_ensemble must be mutually exclusive!")
         if self.waitk_ensemble:
-            logging.info(f'*** waitk_ensemble: {self.waitk_ensemble}')
+            logging.info(f'*** waitk_ensemble: {self.waitk_ensemble} ***')
             m = min(self.waitk_ensemble)
             M = max(self.waitk_ensemble)
             if m*M < 0:
-                raise ValueError(f"elements of waitk_ensemble must have the same sign!")
+                raise ValueError(f"Elements of waitk_ensemble must have the same sign!")
 
         super().__init__(models, tgt_dict, **kwargs)
         if isinstance(models, EnsembleModelDD):
             self.model = models
         else:
-            self.model = EnsembleModelDD(models)
+            self.model = EnsembleModelDD(models, self.waitk_abs, self.iwait)
         self.model.eval()   
         logging.info(f'*** waitk = {self.waitk} ***')
 
@@ -1025,39 +1045,41 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
             List[Dict[str, Dict[str, Optional[Tensor]]]],
             [
                 torch.jit.annotate(Dict[str, Dict[str, Optional[Tensor]]], ({}, {}))
-                for i in range(self.model.models_size)
+                for _ in range(self.model.models_size)
             ],
         )
             
-        if self.waitk > 0:
-            # The second decoder waits for the first
-            waits = [0, self.waitk]
-        elif self.waitk < 0:
-            # The first decoder waits for the second
-            waits = [-self.waitk, 0]
-        else:
-            if not self.waitk_ensemble:
-                waits = [0, 0]
-            else:
-                waitk_abs = [abs(x) for x in self.waitk_ensemble]
-                maxk = max(waitk_abs)
-                if min(self.waitk_ensemble) < 0: # ASR waits for ST
-                    waits = [maxk, 0]
-                else: # ST waits for k steps of ASR (k can be 0 here)
-                    waits = [0, maxk]
-                incremental_states_waitks = {}
-                for k in waitk_abs:
-                    if k == maxk:
-                        continue
-                    incremental_states_waitks[k] = torch.jit.annotate(
-                            List[Dict[str, Dict[str, Optional[Tensor]]]],
-                            [
-                                torch.jit.annotate(Dict[str, Dict[str, Optional[Tensor]]], {})
-                                for i in range(self.model.models_size)
-                            ],
-                        )
-                # If ST waits for ASR: waits[0] = 0, waits[1] = self.waitk > 0
-                iwait = 0 if waits[0] > 0 else 1
+        # if self.waitk > 0:
+        #     # The second decoder waits for the first
+        #     waits = [0, self.waitk]
+        # elif self.waitk < 0:
+        #     # The first decoder waits for the second
+        #     waits = [-self.waitk, 0]
+        # else:
+        #     if not self.waitk_ensemble:
+        #         waits = [0, 0]
+        #     else:
+                # waitk_abs = [abs(x) for x in self.waitk_ensemble]
+                # maxk = max(waitk_abs)
+                # if min(self.waitk_ensemble) < 0: # ASR waits for ST
+                #     waits = [maxk, 0]
+                # else: # ST waits for k steps of ASR (k can be 0 here)
+                #     waits = [0, maxk]
+        waitk_abs, waits, iwait = self.waitk_abs, self.waits, self.iwait
+        if self.waitk_ensemble:
+            incremental_states_waitks = {}
+            for k in waitk_abs:
+                if k == max(self.waitk_abs):
+                    continue
+                incremental_states_waitks[k] = torch.jit.annotate(
+                        List[Dict[str, Dict[str, Optional[Tensor]]]],
+                        [
+                            torch.jit.annotate(Dict[str, Dict[str, Optional[Tensor]]], {})
+                            for _ in range(self.model.models_size)
+                        ],
+                    )
+        # If ST waits for ASR: waits[0] = 0, waits[1] = self.waitk > 0
+        # iwait = 0 if waits[0] > 0 else 1
 
         net_input = sample["net_input"]
 
@@ -1183,63 +1205,77 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                     [incremental_states[i][1] for i in range(len(incremental_states))], 
                     reorder_state)
 
-                if self.waitk_ensemble:
-                    if step >= waits[iwait] + prefix_tokens[iwait].size(1):
-                        for k in waitk_abs:
-                            if k == waits[iwait]:
-                                continue
-                            self.model.reorder_incremental_state(
-                                                incremental_states_waitks[k], 
-                                                reorder_state)
+                # if self.waitk_ensemble:
+                #     for k in waitk_abs:
+                #         if k == waits[iwait]:
+                #             continue
+                #         self.model.reorder_incremental_state(
+                #                             incremental_states_waitks[k], 
+                #                             reorder_state)
                 encoder_outs = self.model.reorder_encoder_out(
                                                 encoder_outs, reorder_state
                                             )
+            
+            if self.waitk != 0 or self.waitk_ensemble is not None:
+                if step == waits[iwait]:
+                    tokens[iwait][:, waits[iwait]] = self.eos
+
+            # Construct tokens for ensemble model
+            _tokens = []
+            if self.waitk_ensemble:
+                for k in self.waitk_ensemble:
+                    _tokens_k = [tokens[i][:, : step + 1] if step < waits[iwait] else
+                                tokens[i][:, waits[i] : step + 1 - (waits[iwait]-k)] if i!=iwait else 
+                                tokens[i][:, waits[iwait] : step + 1] for i in range(2)]
+                    _tokens.append(_tokens_k)
+            else:
+                _tokens = [[tokens[i][:, : step + 1] if step < waits[i] else 
+                            tokens[i][:, waits[i] : step + 1] for i in range(2)]]
             lprobs, avg_attn_scores = self.model.forward_decoder(
-                [tokens[i][:, : step + 1] if step < waits[i] else 
-                tokens[i][:, waits[i] : step + 1] for i in range(2)],
+                _tokens,
                 encoder_outs,
                 incremental_states,
                 self.temperature,
             )
             # logging.info(f'step {step} lprobs[1] at k={waits[i]}: {torch.topk(lprobs[1], k=5)[1]}')
 
-            if self.waitk_ensemble:
-                all_lprobs_iwait = [lprobs[iwait]]
-                if avg_attn_scores is not None:
-                    all_avg_attn_scores_iwait = [avg_attn_scores[iwait]]
-                if step >= waits[iwait] + prefix_tokens[iwait].size(1):
-                    for k in waitk_abs:
-                        if k == waits[iwait]:
-                            continue
-                        tokens_iwait = tokens[iwait][:, waits[iwait] : step + 1]
-                        tokens_other = tokens[1-iwait][:, waits[1-iwait] : step + 1 - (waits[iwait] - k)]
-                        _tokens = [None, None]
-                        _tokens[iwait] = tokens_iwait
-                        _tokens[1-iwait] = tokens_other
-                        incremental_states_k = incremental_states_waitks[k]
-                        _incremental_states = []
-                        for x, y in zip(incremental_states_k, incremental_states):
-                            if iwait == 1:
-                                _incremental_states.append((x, y[1]))
-                            else:
-                                _incremental_states.append((y[0], x))
-                        _lprobs, _avg_attn_scores = self.model.forward_decoder(
-                            _tokens,
-                            encoder_outs,
-                            _incremental_states,
-                            self.temperature,
-                        )
-                        # logging.info(f'- step {step} lprobs[1] at k={k}: {torch.topk(_lprobs[1], k=5)[1]}')
-                        all_lprobs_iwait.append(_lprobs[iwait])
-                        if avg_attn_scores is not None:
-                            all_avg_attn_scores_iwait.append(_avg_attn_scores[iwait])
-                # debug, take only k=8 for prediction
-                # lprobs[iwait] = all_lprobs_iwait[1]
-                    lprobs[iwait] = (torch.logsumexp(torch.stack(all_lprobs_iwait, dim=0), dim=0)
-                                        - math.log(len(all_lprobs_iwait)))
-                    if avg_attn_scores is not None:
-                        avg_attn_scores[iwait] = (torch.logsumexp(torch.stack(all_avg_attn_scores_iwait, dim=0), dim=0)
-                                        - math.log(len(all_avg_attn_scores_iwait)))
+            # if self.waitk_ensemble:
+            #     all_lprobs_iwait = [lprobs[iwait]]
+            #     if avg_attn_scores is not None:
+            #         all_avg_attn_scores_iwait = [avg_attn_scores[iwait]]
+            #     if step >= waits[iwait] + prefix_tokens[iwait].size(1):
+            #         for k in waitk_abs:
+            #             if k == waits[iwait]:
+            #                 continue
+            #             tokens_iwait = tokens[iwait][:, waits[iwait] : step + 1]
+            #             tokens_other = tokens[1-iwait][:, waits[1-iwait] : step + 1 - (waits[iwait] - k)]
+            #             _tokens = [None, None]
+            #             _tokens[iwait] = tokens_iwait
+            #             _tokens[1-iwait] = tokens_other
+            #             incremental_states_k = incremental_states_waitks[k]
+            #             _incremental_states = []
+            #             for x, y in zip(incremental_states_k, incremental_states):
+            #                 if iwait == 1:
+            #                     _incremental_states.append((x, y[1]))
+            #                 else:
+            #                     _incremental_states.append((y[0], x))
+            #             _lprobs, _avg_attn_scores = self.model.forward_decoder(
+            #                 _tokens,
+            #                 encoder_outs,
+            #                 _incremental_states,
+            #                 self.temperature,
+            #             )
+            #             # logging.info(f'- step {step} lprobs[1] at k={k}: {torch.topk(_lprobs[1], k=5)[1]}')
+            #             all_lprobs_iwait.append(_lprobs[iwait])
+            #             if avg_attn_scores is not None:
+            #                 all_avg_attn_scores_iwait.append(_avg_attn_scores[iwait])
+            #     # debug, take only k=8 for prediction
+            #     # lprobs[iwait] = all_lprobs_iwait[1]
+            #         lprobs[iwait] = (torch.logsumexp(torch.stack(all_lprobs_iwait, dim=0), dim=0)
+            #                             - math.log(len(all_lprobs_iwait)))
+            #         if avg_attn_scores is not None:
+            #             avg_attn_scores[iwait] = (torch.logsumexp(torch.stack(all_avg_attn_scores_iwait, dim=0), dim=0)
+            #                             - math.log(len(all_avg_attn_scores_iwait)))
 
             if self.lm_model is not None:
                 lm_out = []
@@ -1615,8 +1651,14 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
 class EnsembleModelDD(EnsembleModel):
     """A wrapper around an ensemble of models."""
 
-    def __init__(self, models):
+    def __init__(self, models, waitk_abs=None, iwait=None):
         super().__init__(models)
+        self.waitk_abs = waitk_abs
+        self.iwait = iwait
+        if self.waitk_abs is not None:
+            self.waitk_abs = waitk_abs
+            self.models = nn.ModuleList([self.single_model for _ in self.waitk_abs])
+            self.models_size = len(self.models)
 
     @torch.jit.export
     def forward_decoder(
@@ -1635,7 +1677,7 @@ class EnsembleModelDD(EnsembleModel):
             # decode each model
             if self.has_incremental_states():
                 decoder_out = model.decoder.forward(
-                    tokens,
+                    tokens[i],
                     encoder_out=encoder_out,
                     incremental_state=incremental_states[i],
                 )
@@ -1664,7 +1706,14 @@ class EnsembleModelDD(EnsembleModel):
             probs = model.get_normalized_probs(
                 decoder_out_tuple, log_probs=True, sample=None
             )
-            probs = [p[:, -1, :] if p is not None else None for p in probs]
+            probs = torch.stack([p[:, -1, :] if p is not None else None for p in probs])
+            # Keep the probs of the other decoder
+            probs_other = None
+            if self.waitk_abs is not None: 
+                if self.waitk_abs[i] != max(self.waitk_abs):
+                    probs[1-self.iwait, :, :] = torch.zeros_like(probs[1-self.iwait])
+                else:
+                    probs_other = probs[1-self.iwait, :, :]
             if self.models_size == 1:
                 return probs, attn
 
@@ -1675,7 +1724,10 @@ class EnsembleModelDD(EnsembleModel):
                 else:
                     avg_attn.add_(attn)
 
-        avg_probs = torch.logsumexp(torch.stack(log_probs, dim=0), dim=0) - math.log(
+        log_probs = torch.stack(log_probs, dim=0)
+        if probs_other is not None:
+            log_probs[:, 1-self.iwait, :, :] = probs_other.repeat(log_probs.size(0), 1, 1)
+        avg_probs = torch.logsumexp(log_probs, dim=0) - math.log(
             self.models_size
         )
 
