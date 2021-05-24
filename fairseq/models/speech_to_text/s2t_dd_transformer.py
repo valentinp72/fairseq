@@ -171,7 +171,7 @@ class TransformerDualDecoderScriptable(TransformerDualDecoder):
         self,
         prev_output_tokens,
         encoder_out: Optional[Dict[str, List[Tensor]]] = None,
-        incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+        incremental_state: Optional[Tuple[Dict[str, Dict[str, Optional[Tensor]]]]] = (None, None),
         full_context_alignment: bool = False,
         alignment_layer: Optional[int] = None,
         alignment_heads: Optional[int] = None,

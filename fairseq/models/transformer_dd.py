@@ -587,7 +587,7 @@ class TransformerDualDecoder(FairseqIncrementalDecoder):
         else:
             wait_k = random.choice(self.wait_k) if isinstance(self.wait_k, list) else self.wait_k
             for i in range(ntask):
-                diagonal = 1 if wait_k==0 else -wait_k if i == 0 else wait_k
+                diagonal = 1 if wait_k==0 else -wait_k if i == 0 else wait_k + 1
                 _future_mask_tmp[i] = torch.triu(
                         utils.fill_with_neg_inf(torch.zeros([dim[i], dim[1-i]])),
                         diagonal=diagonal

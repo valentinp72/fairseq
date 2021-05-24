@@ -1066,6 +1066,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 # else: # ST waits for k steps of ASR (k can be 0 here)
                 #     waits = [0, maxk]
         waitk_abs, waits, iwait = self.waitk_abs, self.waits, self.iwait
+        maxk = max(self.waits)
         if self.waitk_ensemble:
             incremental_states_waitks = {}
             for k in waitk_abs:
@@ -1136,16 +1137,21 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
 
         # initialize buffers
         scores = (
-            torch.zeros(2, bsz * beam_size, max_len + 1).to(src_tokens).float()
+            torch.zeros(2, bsz * beam_size, max_len + maxk + 1).to(src_tokens).float()
         )  # +1 for eos; pad is never chosen for scoring 
             
-        tokens = [torch.zeros(bsz * beam_size, max_len + 2)
+        tokens = [torch.zeros(bsz * beam_size, max_len + maxk + 2)
             .to(src_tokens)
             .long()
             .fill_(self.pad) for i in range(2)]  # +2 for eos and pad
         for i in range(2):
             tokens[i][:, 0] = self.eos if bos_token is None else bos_token
         attn: Optional[List[Tensor]] = [None, None]
+        # # markers for beginning of hypotheses in case where one of the sub-hypotheses ends first
+        # bos_markers = [torch.zeros(bsz * beam_size)
+        #                 .to(src_tokens)
+        #                 .long()
+        #                 .fill_(waits[i]) for i in range(2)]
 
         # A list that indicates candidates that should be ignored.
         # For example, suppose we're sampling and have already finalized 2/5
@@ -1186,7 +1192,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
         else:
             original_batch_idxs = torch.arange(0, bsz).type_as(tokens[0])
 
-        for step in range(max_len + 1):  # one extra step for EOS marker
+        for step in range(max_len + 1 + maxk):  # one extra step for EOS marker
             # reorder decoder internal states based on the prev choice of beams
             if reorder_state is not None:
                 if batch_idxs is not None:
@@ -1231,6 +1237,15 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
             else:
                 _tokens = [[tokens[i][:, : step + 1] if step < waits[i] else 
                             tokens[i][:, waits[i] : step + 1] for i in range(2)]]
+                # for i in range(2):
+                #     _tokens_i = []
+                #     for _i, _idx in enumerate(list(bos_markers[i].cpu().numpy())):
+                #         if step < waits[i]:
+                #             _tokens_i.append((tokens[i][_i, : step + 1]).unsqueeze(0))
+                #         else:
+                #             _tokens_i.append((tokens[i][_i, _idx : step + 1 + _idx]).unsqueeze(0))
+                #     _tokens.append(torch.cat(_tokens_i, dim=0))
+                # _tokens = [_tokens]
             lprobs, avg_attn_scores = self.model.forward_decoder(
                 _tokens,
                 encoder_outs,
@@ -1495,6 +1510,14 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 tokens[i].view(bsz, beam_size, -1)[:, :, step + 1] = torch.gather(
                     cand_indices[i], dim=1, index=active_hypos
                 )
+                # add self.pad to sub-beams that are already ended
+                if step > waits[i] + prefix_tokens[i].size(1):
+                    _added_pad = torch.zeros(tokens[i][tokens[i][:, step] == self.eos].size(0)).unsqueeze(-1).fill_(self.pad).to(tokens[i])
+                    # bos_markers[i] += tokens[i][:, step] == self.eos
+                    tokens[i][tokens[i][:, step] == self.eos] = torch.cat((_added_pad, tokens[i][tokens[i][:, step] == self.eos]), dim=1)[:, :-1]
+                    
+                    # _eos_mask = tokens[i][:, step+1] == self.eos
+                    # tokens[i][_eos_mask, step] = self.pad
             if step > 0:
                 scores[:, :, :step] = torch.index_select(
                     scores[:, :, :step], dim=1, index=active_bbsz_idx
