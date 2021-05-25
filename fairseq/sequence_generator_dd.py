@@ -1037,7 +1037,7 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
     def _generate(
         self,
         sample: Dict[str, Dict[str, Tensor]],
-        prefix_tokens: Optional[Tensor] = None,
+        prefix_tokens: Optional[Tuple[Tensor]] = (None, None),
         constraints: Optional[Tensor] = None,
         bos_token: Optional[int] = None,):
         # incremental_states is a list of tuple: one for ASR and one for ST
@@ -1048,7 +1048,8 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                 for _ in range(self.model.models_size)
             ],
         )
-            
+        if prefix_tokens is None:
+            prefix_tokens = (None, None)
         # if self.waitk > 0:
         #     # The second decoder waits for the first
         #     waits = [0, self.waitk]
@@ -1337,13 +1338,14 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
 
                 # If one (and only one) previous hypothesis (between ASR and ST)
                 # was EOS, then force the subsequent tokens to be EOS as well
-                if step > waits[i] + prefix_tokens[i].size(1):
-                    # logging.info(f'step {step} - tokens[{i}]:\n{tokens[i][:, max(0,step-5):step+1]}')
-                    _eos_mask = tokens[i][:, step] == self.eos
-                    if torch.any(_eos_mask):
-                        lprobs[i][_eos_mask, : self.eos] = -math.inf
-                        lprobs[i][_eos_mask, self.eos] = 0.0
-                        lprobs[i][_eos_mask, self.eos + 1 :] = -math.inf
+                if prefix_tokens[i] is not None:
+                    if step > waits[i] + prefix_tokens[i].size(1):
+                        # logging.info(f'step {step} - tokens[{i}]:\n{tokens[i][:, max(0,step-5):step+1]}')
+                        _eos_mask = tokens[i][:, step] == self.eos
+                        if torch.any(_eos_mask):
+                            lprobs[i][_eos_mask, : self.eos] = -math.inf
+                            lprobs[i][_eos_mask, self.eos] = 0.0
+                            lprobs[i][_eos_mask, self.eos + 1 :] = -math.inf
 
                 # Record attention scores, only support avg_attn_scores is a Tensor
                 if avg_attn_scores is not None:
@@ -1511,13 +1513,14 @@ class SequenceGeneratorDualBeam(SequenceGenerator):
                     cand_indices[i], dim=1, index=active_hypos
                 )
                 # add self.pad to sub-beams that are already ended
-                if step > waits[i] + prefix_tokens[i].size(1):
-                    _added_pad = torch.zeros(tokens[i][tokens[i][:, step] == self.eos].size(0)).unsqueeze(-1).fill_(self.pad).to(tokens[i])
-                    # bos_markers[i] += tokens[i][:, step] == self.eos
-                    tokens[i][tokens[i][:, step] == self.eos] = torch.cat((_added_pad, tokens[i][tokens[i][:, step] == self.eos]), dim=1)[:, :-1]
-                    
-                    # _eos_mask = tokens[i][:, step+1] == self.eos
-                    # tokens[i][_eos_mask, step] = self.pad
+                if prefix_tokens[i] is not None:
+                    if step > waits[i] + prefix_tokens[i].size(1):
+                        _added_pad = torch.zeros(tokens[i][tokens[i][:, step] == self.eos].size(0)).unsqueeze(-1).fill_(self.pad).to(tokens[i])
+                        # bos_markers[i] += tokens[i][:, step] == self.eos
+                        tokens[i][tokens[i][:, step] == self.eos] = torch.cat((_added_pad, tokens[i][tokens[i][:, step] == self.eos]), dim=1)[:, :-1]
+                        
+                        # _eos_mask = tokens[i][:, step+1] == self.eos
+                        # tokens[i][_eos_mask, step] = self.pad
             if step > 0:
                 scores[:, :, :step] = torch.index_select(
                     scores[:, :, :step], dim=1, index=active_bbsz_idx
