@@ -345,6 +345,7 @@ class S2TTransformerEncoder(FairseqEncoder):
     def _forward(self, src_tokens, src_lengths, return_all_hiddens=False):
         x, input_lengths = self.subsample(src_tokens, src_lengths)
         x = self.embed_scale * x
+        embed_src_tokens = x
 
         encoder_padding_mask = lengths_to_padding_mask(input_lengths)
         positions = self.embed_positions(encoder_padding_mask).transpose(0, 1)
@@ -370,6 +371,8 @@ class S2TTransformerEncoder(FairseqEncoder):
             "encoder_states": encoder_states,  # List[T x B x C]
             "src_tokens": [],
             "src_lengths": [],
+            "input_lengths": [input_lengths],
+            "embed_src_tokens": [embed_src_tokens], # T x B x C
         }
 
     def forward(self, src_tokens, src_lengths, return_all_hiddens=False):
@@ -438,7 +441,7 @@ class TransformerDecoderScriptable(TransformerDecoder):
         alignment_heads: Optional[int] = None,
     ):
         # call scriptable method from parent class
-        x, _ = self.extract_features_scriptable(
+        x, extra = self.extract_features_scriptable(
             prev_output_tokens,
             encoder_out,
             incremental_state,

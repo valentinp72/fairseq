@@ -21,10 +21,7 @@ from fairseq.data.audio.multi_modality_dataset import (
     LangPairMaskDataset,
     ModalityDatasetItem,
 )
-from fairseq.data.audio.speech_to_text_dataset import (
-    SpeechToTextDataset,
-    SpeechToTextDatasetCreator,
-)
+from fairseq.data.audio.speech_to_text_dataset import SpeechToTextDataset, SpeechToTextDatasetCreator
 from fairseq.data.audio.speech_to_text_joint_dataset import (
     S2TJointDataConfig,
     SpeechToTextJointDatasetCreator,
@@ -37,8 +34,8 @@ logger = logging.getLogger(__name__)
 LANG_TAG_TEMPLATE = "<lang:{}>"
 
 
-@register_task("speech_text_joint_to_text")
-class SpeechTextJointToTextTask(SpeechToTextTask):
+@register_task("speech_text_joint_to_text_dev")
+class SpeechTextJointToTextDevTask(SpeechToTextTask):
     """
     Task for joint training speech and text to text.
     """
@@ -46,7 +43,7 @@ class SpeechTextJointToTextTask(SpeechToTextTask):
     @classmethod
     def add_args(cls, parser):
         """Add task-specific arguments to the parser."""
-        super(SpeechTextJointToTextTask, cls).add_args(parser)
+        super(SpeechTextJointToTextDevTask, cls).add_args(parser)
         ###
         parser.add_argument(
             "--parallel-text-data",
@@ -92,7 +89,9 @@ class SpeechTextJointToTextTask(SpeechToTextTask):
             help="use mixed data in one update when update-freq  > 1",
         )
         parser.add_argument(
-            "--load-speech-only", action="store_true", help="load speech data only",
+            "--load-speech-only",
+            action="store_true",
+            help="load speech data only",
         )
         parser.add_argument(
             "--mask-text-ratio",
@@ -118,20 +117,20 @@ class SpeechTextJointToTextTask(SpeechToTextTask):
             metavar="S",
             help="target language for inference",
         )
-        parser.add_argument(
-            "--max-source-positions",
-            default=6000,
-            type=int,
-            metavar="N",
-            help="max number of tokens in the source sequence",
-        )
-        parser.add_argument(
-            "--max-target-positions",
-            default=1024,
-            type=int,
-            metavar="N",
-            help="max number of tokens in the target sequence",
-        )
+        # parser.add_argument(
+        #     "--max-source-positions",
+        #     default=6000,
+        #     type=int,
+        #     metavar="N",
+        #     help="max number of tokens in the source sequence",
+        # )
+        # parser.add_argument(
+        #     "--max-target-positions",
+        #     default=1024,
+        #     type=int,
+        #     metavar="N",
+        #     help="max number of tokens in the target sequence",
+        # )
 
     def __init__(self, args, src_dict, tgt_dict, infer_tgt_lang_id=None):
         super().__init__(args, tgt_dict)
@@ -175,9 +174,7 @@ class SpeechTextJointToTextTask(SpeechToTextTask):
             assert infer_tgt_lang_id != tgt_dict.unk()
         return cls(args, src_dict, tgt_dict, infer_tgt_lang_id=infer_tgt_lang_id)
 
-    def load_langpair_dataset(
-        self, prepend_tgt_lang_tag=False, sampling_alpha=1.0, epoch=0
-    ):
+    def load_langpair_dataset(self, prepend_tgt_lang_tag=False, sampling_alpha=1.0, epoch=0):
         lang_pairs = []
         text_dataset = None
         split = "train"
@@ -217,7 +214,9 @@ class SpeechTextJointToTextTask(SpeechToTextTask):
                     alpha=sampling_alpha,
                 )
                 lang_pairs = [
-                    ResamplingDataset(d, size_ratio=r, epoch=epoch, replace=(r >= 1.0))
+                    ResamplingDataset(
+                        d, size_ratio=r, epoch=epoch, replace=(r >= 1.0)
+                    )
                     for d, r in zip(lang_pairs, size_ratios)
                 ]
             return ConcatDataset(lang_pairs)
@@ -249,6 +248,8 @@ class SpeechTextJointToTextTask(SpeechToTextTask):
         Args:
             split (str): name of the split (e.g., train, valid, test)
         """
+        src_dict=None if self.speech_only else self.src_dict
+        logging.info(f"src_dict: {src_dict}")
         is_train_split = split.startswith("train")
         pre_tokenizer = self.build_tokenizer(self.args)
         bpe_tokenizer = self.build_bpe(self.args)
@@ -272,7 +273,9 @@ class SpeechTextJointToTextTask(SpeechToTextTask):
         text_dataset = None
         if self.args.parallel_text_data != "" and is_train_split:
             text_dataset = self.load_langpair_dataset(
-                self.data_cfg.prepend_tgt_lang_tag_no_change, 1.0, epoch=epoch,
+                self.data_cfg.prepend_tgt_lang_tag_no_change,
+                1.0,
+                epoch=epoch,
             )
             if self.args.mask_text_ratio > 0:
                 # add mask
@@ -339,13 +342,10 @@ class SpeechTextJointToTextTask(SpeechToTextTask):
         epoch=0,
         data_buffer_size=0,
         disable_iterator_cache=False,
-        skip_remainder_batch=False,
-        grouped_shuffling=False,
-        update_epoch_batch_itr=False,
     ):
 
         if not isinstance(dataset, MultiModalityDataset):
-            return super(SpeechTextJointToTextTask, self).get_batch_iterator(
+            return super(SpeechTextJointToTextDevTask, self).get_batch_iterator(
                 dataset,
                 max_tokens,
                 max_sentences,
@@ -359,8 +359,6 @@ class SpeechTextJointToTextTask(SpeechToTextTask):
                 epoch,
                 data_buffer_size,
                 disable_iterator_cache,
-                skip_remainder_batch=skip_remainder_batch,
-                update_epoch_batch_itr=update_epoch_batch_itr,
             )
 
         mult_ratio = [self.args.speech_sample_ratio, self.args.text_sample_ratio]
@@ -385,7 +383,6 @@ class SpeechTextJointToTextTask(SpeechToTextTask):
             epoch=epoch,
             mult_rate=1 if self.args.update_mix_data else max(self.args.update_freq),
             buffer_size=data_buffer_size,
-            skip_remainder_batch=skip_remainder_batch,
         )
         self.dataset_to_epoch_iter[dataset] = {}  # refresh it every epoch
         return epoch_iter

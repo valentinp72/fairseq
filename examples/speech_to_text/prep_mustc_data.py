@@ -181,6 +181,8 @@ def process(args):
             df = filter_manifest_df(df, is_train_split=is_train_split)
             save_df_to_tsv(df, cur_root / f"{split}_{args.task}.tsv")
         # Generate vocab
+        df = load_df_from_tsv(cur_root / f"train_{args.task}.tsv")
+        train_text = df["tgt_text"].to_list()
         v_size_str = "" if args.vocab_type == "char" else str(args.vocab_size)
         spm_filename_prefix = f"spm_{args.vocab_type}{v_size_str}_{args.task}"
         with NamedTemporaryFile(mode="w") as f:
@@ -242,6 +244,7 @@ def process_joint(args):
             special_symbols=special_symbols
         )
     # Generate config YAML
+    v_size_str = "" if args.vocab_type == "char" else str(args.vocab_size)
     gen_config_yaml(
         cur_root,
         spm_filename=spm_filename_prefix + ".model",
