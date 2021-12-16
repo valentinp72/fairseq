@@ -32,7 +32,8 @@ from tqdm import tqdm
 log = logging.getLogger(__name__)
 
 
-MANIFEST_COLUMNS = ["id", "audio", "n_frames", "tgt_text", "speaker"]
+MANIFEST_COLUMNS = ["id", "audio", "n_frames", "tgt_text", "speaker", 
+                    "src_text", "src_lang", "tgt_lang"]
 
 
 class CoVoST(Dataset):
