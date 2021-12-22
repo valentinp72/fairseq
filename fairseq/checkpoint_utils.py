@@ -893,6 +893,7 @@ def load_pretrained_component_from_model_different_keys_v2(
     checkpoint: Union[str, dict],
     ckpt_component_types=["encoder"],
     exclude_layers=None,
+    changed_subkeys=None,
 ):
     """
     Load a pretrained FairseqEncoder or FairseqDecoder from checkpoint into the
@@ -915,6 +916,9 @@ def load_pretrained_component_from_model_different_keys_v2(
     component_state_dict = OrderedDict()
     loaded_components = []
     for key in state["model"].keys():
+        if changed_subkeys is not None:
+            for old_val, new_val in changed_subkeys.items():
+                new_key = key.replace(old_val, new_val)
         for ckpt_type in ckpt_component_types:
             if exclude_layers is None:
                 do_load = True if key.startswith(ckpt_type) else False
@@ -925,7 +929,7 @@ def load_pretrained_component_from_model_different_keys_v2(
                     )
             if do_load:
                 # encoder.input_layers.0.0.weight --> input_layers.0.0.weight
-                component_subkey = key[len(ckpt_type) + 1 :]
+                component_subkey = new_key[len(ckpt_type) + 1 :]
                 component_state_dict[component_subkey] = state["model"][key]
                 loaded_components.append(component_subkey)
             
@@ -933,9 +937,9 @@ def load_pretrained_component_from_model_different_keys_v2(
     if len(not_loaded_components) > 0:
         logging.info(f"*** Not loaded components (to be initialized randomly) ***")
     for key in not_loaded_components:
-        if "_proj" not in key: # MHA keys
-            logging.info(f"- {key}")
-            component_state_dict[key] = component.state_dict()[key]
+        # if "_proj" not in key: # MHA keys
+        logging.info(f"- {key}")
+        component_state_dict[key] = component.state_dict()[key]
     component.load_state_dict(component_state_dict, strict=True)
     return component
 
