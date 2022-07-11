@@ -341,6 +341,8 @@ class S2TTransformerEncoder(FairseqEncoder):
         self.ctc_proj = None
         if getattr(args, "ctc_weight", 0.0) > 0.0:
             self.ctc_proj = nn.Linear(args.encoder_embed_dim, args.tgt_dict_size)
+        self.severed_layer = getattr(args, "severed_layer", None)
+        logging.info(f"self.severed_layer: {self.severed_layer}")
 
     def _forward(self, src_tokens, src_lengths, return_all_hiddens=False):
         x, input_lengths = self.subsample(src_tokens, src_lengths)
@@ -353,9 +355,12 @@ class S2TTransformerEncoder(FairseqEncoder):
         x = self.dropout_module(x)
 
         encoder_states = []
+        severed_x = None
 
-        for layer in self.transformer_layers:
+        for i, layer in enumerate(self.transformer_layers):
             x = layer(x, encoder_padding_mask)
+            if self.severed_layer is not None and i == self.severed_layer - 1:
+                severed_x = x
             if return_all_hiddens:
                 encoder_states.append(x)
 
@@ -373,6 +378,7 @@ class S2TTransformerEncoder(FairseqEncoder):
             "src_lengths": [],
             "input_lengths": [input_lengths],
             "embed_src_tokens": [embed_src_tokens], # T x B x C
+            "severed_encoder_out": [severed_x],
         }
 
     def forward(self, src_tokens, src_lengths, return_all_hiddens=False):
