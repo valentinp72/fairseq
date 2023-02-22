@@ -42,7 +42,6 @@ logger = logging.getLogger(__name__)
 def Linear(in_features, out_features, bias=True):
     m = nn.Linear(in_features, out_features, bias)
     nn.init.xavier_uniform_(m.weight)
-    logging.info(f"| bias in Linear layer: {bias}")
     if bias:
         nn.init.constant_(m.bias, 0.0)
     return m
@@ -97,14 +96,19 @@ class TransformerLinearEncoder(FairseqEncoder):
     def __init__(self, model_args, dictionary, enc_emb):
         super().__init__(dictionary)
 
-        self.main_encoder = TransformerEncoder(model_args, dictionary, enc_emb)
-        self.dropout_module = FairseqDropout(model_args.dropout)
-        self.proj = Linear(model_args.encoder_embed_dim, len(dictionary))
+        self.main_encoder = TransformerEncoder(model_args, dictionary, enc_emb) # T x B x C
+        self.adapter_layernorm = LayerNorm(model_args.encoder_embed_dim)
+        self.adapter_proj_up = Linear(model_args.encoder_embed_dim, model_args.encoder_embed_dim*4)
+        # self.adapter_dropout_module = FairseqDropout(model_args.dropout)
+        self.adapter_activation = nn.ReLU()
+        self.adapter_proj_down = Linear(model_args.encoder_embed_dim*4, model_args.spch_encoder_embed_dim)
 
     def forward(self, src_tokens, src_lengths):
         ret = self.main_encoder(src_tokens, src_lengths)
         x = ret["encoder_out"][0]
-        x = self.proj(self.dropout_module(x.transpose(0, 1))) # B x T x V
+        x = self.adapter_layernorm(x)
+        x = self.adapter_proj_up(x.transpose(0, 1))
+        x = self.adapter_proj_down(self.adapter_activation(x))
         ret["encoder_out"] = [x.transpose(0, 1)]
         return ret
 
@@ -257,7 +261,8 @@ class SiameseSpeechTextEncoders(FairseqEncoder):
                             ):
         cfg = {
             "encoder_embed_dim": args.encoder_text_embed_dim,
-            "encoder_ffn_embed_dim": args.encoder_ffn_embed_dim,
+            "spch_encoder_embed_dim": args.encoder_embed_dim,
+            "encoder_ffn_embed_dim": args.encoder_text_ffn_embed_dim,
             "encoder_layers": args.text_encoder_layers,
             "encoder_layerdrop": args.encoder_layerdrop,
             "encoder_attention_heads": args.encoder_attention_heads,
@@ -527,6 +532,12 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
             type=int,
             metavar="N",
             help="encoder embedding dimension for FFN",
+        )
+        parser.add_argument(
+            "--encoder-text-ffn-embed-dim",
+            type=int,
+            metavar="N",
+            help="text encoder embedding dimension for FFN",
         )
         parser.add_argument(
             "--encoder-attention-heads",
@@ -805,6 +816,11 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
             help="Use auxiliary text encoder for OT loss"
         )
         parser.add_argument(
+            "--decoder-learned-pos",
+            action="store_true",
+            help="Use auxiliary text encoder for OT loss"
+        )
+        parser.add_argument(
             "--encoder-text-layernorm-embedding",
             action="store_true",
             help="Use auxiliary text encoder for OT loss"
@@ -936,8 +952,9 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
         if getattr(args, "freeze_text_encoder_aux", False):
             logging.info(f"Freezing text encoder aux ...")
             for n, p in text_encoder_aux.named_parameters():
-                logging.info(f"- freezing {n}")
-                p.requires_grad = False
+                if "adapter" not in n:
+                    logging.info(f"- freezing {n}")
+                    p.requires_grad = False
         if getattr(args, "freeze_text_encoder_embed", False):
             logging.info(f"Freezing text encoder embedding layer...")
             text_encoder.embed_tokens.requires_grad = False
@@ -1096,6 +1113,10 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
                     reset_key=reset_key,
                 )
             logging.info(f"Loaded pretrained decoder from {args.load_pretrain_speech_decoder}")
+
+        if getattr(task, "langs", None) is not None and speech_decoder is not None:
+            logging.info(f"Set output_projection of speech decoder")
+            speech_decoder.output_projection.weight = speech_decoder.embed_tokens.weight
 
         if getattr(args, "freeze_speech_decoder", False):
             logging.info(f"Freezing speech decoder ...")
@@ -1328,12 +1349,8 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
             return Y.transpose(0, 1), reduced_t / (T*B)
 
         if mode != "text":
-            if not self.encoder.use_linear_after_encoder:
-                speech_out = encoder_out[0]["encoder_out"][0] if isinstance(encoder_out, tuple) \
+            speech_out = encoder_out[0]["encoder_out"][0] if isinstance(encoder_out, tuple) \
                     else encoder_out["encoder_out"][0] # T x B x D
-            else: # not implemented yet for 3 encoders
-                assert isinstance(self.decoder, CTCDecoder)
-                speech_out = decoder_out[0] # T x B x V
             x = speech_out
             
             # Shrink speech output
@@ -1448,6 +1465,9 @@ def siamese_st2t_transformer_l(args):
     args.speech_encoder_layers = getattr(args, "speech_encoder_layers", 12)
     args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 1024)
     args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 1024 * 4)
+    args.encoder_text_ffn_embed_dim = getattr(
+        args, "encoder_text_ffn_embed_dim", args.encoder_ffn_embed_dim
+    )
     args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 16)
     args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 16)
     args.dropout = getattr(args, "dropout", 0.25)

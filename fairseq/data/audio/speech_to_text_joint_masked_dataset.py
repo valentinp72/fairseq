@@ -62,6 +62,9 @@ class SpeechToTextJointMaskedDataset(SpeechToTextJointDataset):
         mask_prob=0.15,
         mask_multiple_length=3,
         speech_only=False,
+        text_encoder_langtok=None,
+        # decoder_langtok=False,
+        langs=None,
         ):
         super().__init__(
             split, 
@@ -86,9 +89,42 @@ class SpeechToTextJointMaskedDataset(SpeechToTextJointDataset):
         self.mask_prob = mask_prob
         self.mask_multiple_length = mask_multiple_length
         self.speech_only = speech_only
+        self.text_encoder_langtok = text_encoder_langtok
+        # self.decoder_langtok = decoder_langtok
+        self.src_langs = src_langs
+        self.tgt_langs = tgt_langs
+        self.langs = langs # language symbols loaded from external txt file
+
+    # def get_lang_tag_idx(self, lang: str, dictionary: Dictionary, style="s2t"):
+    #     if style == "s2t":
+    #         lang_tag_idx = dictionary.index("<lang:{}>".format(lang))
+    #     elif style == "mbart":
+    #         for _lang_sym in self.langs: # change lang symbol to mBART's style
+    #             if lang in _lang_sym:
+    #                 lang = _lang_sym
+    #                 break
+    #         lang_tag_idx = dictionary.index("[{}]".format(lang))
+    #     else:
+    #         raise NotImplementedError
+    #     assert lang_tag_idx != dictionary.unk()
+    #     return lang_tag_idx
 
     def __getitem__(self, index: int) -> SpeechToTextJointMaskedDatasetItem:
-        s2t_joint_dataset_item = super().__getitem__(index)        
+        s2t_joint_dataset_item = super().__getitem__(index) 
+        if self.text_encoder_langtok is not None:
+            input_text_lang_idx = (
+                self.get_lang_tag_idx(
+                    self.src_langs[index], self.src_dict, style="mbart"
+                ) if self.text_encoder_langtok == "src"
+                else self.get_lang_tag_idx(self.tgt_langs[index], self.tgt_dict, style="mbart")
+            )
+            # logging.info(f'input_text_lang_idx: {input_text_lang_idx}')
+            src_txt_tokens = s2t_joint_dataset_item.src_txt_tokens
+            s2t_joint_dataset_item = s2t_joint_dataset_item._replace(
+                src_txt_tokens = torch.cat(
+                (torch.LongTensor([input_text_lang_idx]), src_txt_tokens), 0
+            ))
+
         if self.speech_only:
             s2t_joint_dataset_item = SpeechToTextJointDatasetItem(
                 index=index,
@@ -97,6 +133,7 @@ class SpeechToTextJointMaskedDataset(SpeechToTextJointDataset):
                 src_txt_tokens=None,
                 tgt_lang_tag=s2t_joint_dataset_item.tgt_lang_tag,
             )
+        # logger.info(f"s2t_joint_dataset_item: {s2t_joint_dataset_item}")
             
         masked_src_tokens, masked_target = None, None
         if s2t_joint_dataset_item.src_txt_tokens is not None:
@@ -276,6 +313,9 @@ class SpeechToTextJointMaskedDatasetCreator(SpeechToTextDatasetCreator):
         mask_prob,
         mask_multiple_length,
         speech_only,
+        text_encoder_langtok,
+        # decoder_langtok,
+        langs,
     ) -> SpeechToTextJointMaskedDataset:
         audio_root = Path(cfg.audio_root)
         ids = [s[cls.KEY_ID] for s in samples]
@@ -286,6 +326,20 @@ class SpeechToTextJointMaskedDatasetCreator(SpeechToTextDatasetCreator):
         speakers = [s.get(cls.KEY_SPEAKER, cls.DEFAULT_SPEAKER) for s in samples]
         src_langs = [s.get(cls.KEY_SRC_LANG, cls.DEFAULT_LANG) for s in samples]
         tgt_langs = [s.get(cls.KEY_TGT_LANG, cls.DEFAULT_LANG) for s in samples]
+        if langs is not None:
+            src_lang = list(set(src_langs))
+            tgt_lang = list(set(tgt_langs))
+            assert len(src_lang) == 1
+            assert len(tgt_lang) == 1
+            for _lang_sym in langs: # change lang symbol to mBART's style
+                if src_lang[0] in _lang_sym:
+                    src_langs = [_lang_sym for _ in samples]
+                    break
+            for _lang_sym in langs: # change lang symbol to mBART's style
+                if tgt_lang[0] in _lang_sym:
+                    tgt_langs = [_lang_sym for _ in samples]
+                    break
+            
         return SpeechToTextJointMaskedDataset(
             split_name,
             is_train_split,
@@ -308,6 +362,9 @@ class SpeechToTextJointMaskedDatasetCreator(SpeechToTextDatasetCreator):
             mask_prob=mask_prob,
             mask_multiple_length=mask_multiple_length,
             speech_only=speech_only,
+            text_encoder_langtok=text_encoder_langtok,
+            # decoder_langtok=decoder_langtok,
+            langs=langs,
         )
 
     @classmethod
@@ -327,6 +384,9 @@ class SpeechToTextJointMaskedDatasetCreator(SpeechToTextDatasetCreator):
         mask_prob,
         mask_multiple_length,
         speech_only,
+        text_encoder_langtok,
+        # decoder_langtok,
+        langs,
     ) -> SpeechToTextJointMaskedDataset:
         samples = cls._load_samples_from_tsv(root, split)
         return cls._from_list(
@@ -344,6 +404,9 @@ class SpeechToTextJointMaskedDatasetCreator(SpeechToTextDatasetCreator):
             mask_prob,
             mask_multiple_length,
             speech_only,
+            text_encoder_langtok,
+            # decoder_langtok,
+            langs,
         )
 
     @classmethod
@@ -365,6 +428,9 @@ class SpeechToTextJointMaskedDatasetCreator(SpeechToTextDatasetCreator):
         mask_prob: float,
         mask_multiple_length: int,
         speech_only: bool,
+        text_encoder_langtok: bool,
+        # decoder_langtok: bool,
+        langs: list,
     ) -> SpeechToTextJointMaskedDataset:
         datasets = [
             cls._from_tsv(
@@ -382,6 +448,9 @@ class SpeechToTextJointMaskedDatasetCreator(SpeechToTextDatasetCreator):
                 mask_prob,
                 mask_multiple_length,
                 speech_only,
+                text_encoder_langtok,
+                # decoder_langtok,
+                langs,
             )
             for split in splits.split(",")
         ]

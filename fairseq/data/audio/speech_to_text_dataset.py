@@ -181,6 +181,10 @@ class SpeechToTextDataset(FairseqDataset):
             tgt_lang_tags = [
                 self.LANG_TAG_TEMPLATE.format(t) for t in set(self.tgt_langs)
             ]
+            if all("_" in l for l in self.tgt_langs): # mbart style
+                tgt_lang_tags = [
+                    "[{}]".format(t) for t in set(self.tgt_langs)
+            ]
             assert all(t in self.tgt_dict for t in tgt_lang_tags)
 
     @classmethod
@@ -205,8 +209,11 @@ class SpeechToTextDataset(FairseqDataset):
         return feature.reshape(n_packed_frames, -1)
 
     @classmethod
-    def get_lang_tag_idx(cls, lang: str, dictionary: Dictionary):
-        lang_tag_idx = dictionary.index(cls.LANG_TAG_TEMPLATE.format(lang))
+    def get_lang_tag_idx(cls, lang: str, dictionary: Dictionary, style="s2t"):
+        if style == "s2t":
+            lang_tag_idx = dictionary.index(cls.LANG_TAG_TEMPLATE.format(lang))
+        elif style == "mbart":
+            lang_tag_idx = dictionary.index("[{}]".format(lang))
         assert lang_tag_idx != dictionary.unk()
         return lang_tag_idx
 
@@ -269,7 +276,8 @@ class SpeechToTextDataset(FairseqDataset):
             ).long()
             if self.cfg.prepend_tgt_lang_tag:
                 lang_tag_idx = self.get_lang_tag_idx(
-                    self.tgt_langs[index], self.tgt_dict
+                    self.tgt_langs[index], self.tgt_dict,
+                    style="s2t" if not any("_" in l for l in self.tgt_langs) else "mbart"
                 )
                 target = torch.cat((torch.LongTensor([lang_tag_idx]), target), 0)
 

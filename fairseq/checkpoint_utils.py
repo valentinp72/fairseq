@@ -895,6 +895,7 @@ def load_pretrained_component_from_model_different_keys_v2(
     exclude_layers=None,
     changed_subkeys=None,
     reset_key=True,
+    prefix="",
 ):
     """
     Load a pretrained FairseqEncoder or FairseqDecoder from checkpoint into the
@@ -934,7 +935,7 @@ def load_pretrained_component_from_model_different_keys_v2(
                 do_load = True if new_key.startswith(ckpt_type) else do_load
             if do_load:
                 # encoder.input_layers.0.0.weight --> input_layers.0.0.weight
-                component_subkey = new_key[len(ckpt_type) + 1 :]
+                component_subkey = prefix + new_key[len(ckpt_type) + 1 :]
                 component_state_dict[component_subkey] = state["model"][key]
                 loaded_components.append(component_subkey)
             

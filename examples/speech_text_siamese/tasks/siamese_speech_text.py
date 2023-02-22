@@ -21,6 +21,7 @@ from fairseq.data import (
     NumSamplesDataset,
     IdDataset,
 )
+from fairseq.file_io import PathManager
 from fairseq.data.audio.multi_modality_dataset import (
     MultiModalityDataset,
     ModalityDatasetItem,
@@ -128,11 +129,28 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
             metavar="N",
             help="",
         )
+        parser.add_argument('--text-encoder-langtok', default=None, type=str, choices=['src', 'tgt'],
+                            metavar='SRCTGT',
+                            help='replace beginning-of-sentence in source sentence with source or target '
+                                 'language token. (src/tgt)')
+        # parser.add_argument('--decoder-langtok', action='store_true',
+        #                     help='replace beginning-of-sentence in target sentence with target language token')
+        parser.add_argument(
+            "--lang-dict",
+            default=None,
+            type=str,
+            help="an external file which contains a list of "
+            "languages which can appear in lang-pairs; "
+            "note that the ordering determines language token IDs; "
+            "--langs and --lang-dict are two exclusive options",
+        )
 
-    def __init__(self, args, src_dict, tgt_dict):
+    def __init__(self, args, src_dict, tgt_dict, langs=None):
         super().__init__(args, src_dict, tgt_dict)
         self.src_dict = src_dict
         self.tgt_dict = tgt_dict
+        self.langs = langs
+        logging.info(f"LANGS: {self.langs}")
         self.data_cfg = S2TJointDataConfig(Path(args.data) / args.config_yaml)
         self.speech_only = getattr(args, "load_speech_only", False)
         self.mask_idx = None
@@ -159,8 +177,25 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
         tgt_dict = Dictionary.load(tgt_dict_path.as_posix())
         logger.info(
             f"target dictionary size ({data_cfg.vocab_filename}): " f"{len(tgt_dict):,}")
+        
+        langs = None
+        if args.lang_dict:
+            with open(
+                PathManager.get_local_path(args.lang_dict), "r", encoding="utf-8"
+            ) as f:
+                langs = [lang.strip() for lang in f.readlines() if lang.strip()]
+                logger.info(
+                    f"loaded language list from {args.lang_dict} as they are ordered in file"
+                )
+            # augment dictionary with loaded language symbols
+            for lang in langs:
+                src_dict.add_symbol("[{}]".format(lang)) # mbart style
+                tgt_dict.add_symbol("[{}]".format(lang))
+                logging.info(f'lang {lang} has idx {src_dict.index("[{}]".format(lang))}')
+            src_dict.add_symbol("<mask>")
+            tgt_dict.add_symbol("<mask>")
 
-        return cls(args, src_dict, tgt_dict)
+        return cls(args, src_dict, tgt_dict, langs)
 
     def load_monolingual_dataset(self, split, epoch=1, combine=False, **kwargs):
         dataset = None
@@ -261,7 +296,10 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
             mask_sym=self.mask_sym,
             mask_prob=self.args.mask_prob,
             mask_multiple_length=int(self.args.mask_multiple_length),
-            speech_only=self.speech_only, 
+            speech_only=self.speech_only,
+            text_encoder_langtok=self.args.text_encoder_langtok,
+            # decoder_langtok=self.args.decoder_langtok,
+            langs=self.langs,
         )
         text_dataset = None
         if self.args.monolingual_text_data != "" and is_train_split:
