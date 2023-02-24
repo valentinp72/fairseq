@@ -39,6 +39,8 @@ class WassGuidedCrossEntAccCriterion(GuidedCrossEntAccCriterion):
         self.ot_weight = ot_weight
         self.ot_mt_weight = ot_mt_weight
         self.ot_st_weight = ot_st_weight
+        if self.ot_weight > 0.0 or self.ot_mt_weight > 0.0 or self.ot_st_weight:
+            self.ot_loss = SamplesLoss(loss="sinkhorn", p=2, blur=.05)
 
     @staticmethod
     def add_args(parser):
@@ -100,20 +102,17 @@ class WassGuidedCrossEntAccCriterion(GuidedCrossEntAccCriterion):
                 speech_out = encoder_out[0]["encoder_out"][0] # T x B x D
                 text_out = encoder_out[1]["encoder_out"][0] # T x B x D
                 if self.ot_weight > 0.0:
-                    wloss = SamplesLoss(loss="sinkhorn", p=2, blur=.05)
-                    wass_loss = wloss(speech_out.float().transpose(0, 1).contiguous(), 
+                    wass_loss = self.ot_loss(speech_out.float().transpose(0, 1).contiguous(), 
                                     text_out.float().transpose(0, 1).contiguous()
                                     ).sum()
                     loss  += self.ot_weight * wass_loss
                 if self.ot_mt_weight > 0.0:
-                    wloss_mt = SamplesLoss(loss="sinkhorn", p=2, blur=.05)
-                    wass_loss_mt = wloss_mt(text_out.float().transpose(0, 1).contiguous(), 
+                    wass_loss_mt = self.ot_loss(text_out.float().transpose(0, 1).contiguous(), 
                                     net_output[1]["extra"].transpose(0, 1).contiguous()
                                     ).sum()
                     loss  += self.ot_mt_weight * wass_loss_mt
                 if self.ot_st_weight > 0.0:
-                    wloss_st = SamplesLoss(loss="sinkhorn", p=2, blur=.05)
-                    wass_loss_st = wloss_st(speech_out.float().transpose(0, 1).contiguous(), 
+                    wass_loss_st = self.ot_loss(speech_out.float().transpose(0, 1).contiguous(), 
                                     net_output[1]["extra"].transpose(0, 1).contiguous()
                                     ).sum()
                     loss  += self.ot_st_weight * wass_loss_st
