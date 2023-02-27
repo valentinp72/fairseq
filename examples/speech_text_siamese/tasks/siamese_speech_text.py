@@ -5,6 +5,7 @@
 
 import os
 import logging
+import re
 from pathlib import Path
 import numpy as np
 
@@ -27,10 +28,10 @@ from fairseq.data.audio.multi_modality_dataset import (
     ModalityDatasetItem,
 )
 from fairseq.data.audio.speech_to_text_joint_dataset import (
-    S2TJointDataConfig,
+    S2TJointDataConfig, SpeechToTextDataset,
 )
 from fairseq.data.audio.speech_to_text_joint_masked_dataset import (
-    SpeechToTextJointMaskedDatasetCreator,
+    SpeechToTextJointMaskedDatasetCreator, SpeechToTextJointMaskedDataset,
 )
 from fairseq.data.shorten_dataset import maybe_shorten_dataset
 from fairseq.tasks import register_task
@@ -329,3 +330,35 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
         """Return the source :class:`~fairseq.data.Dictionary` (if applicable
         for this task)."""
         return self.src_dict
+
+    def build_generator(
+        self,
+        models,
+        args,
+        seq_gen_cls=None,
+        extra_gen_cls_kwargs=None,
+    ):
+        if self.data_cfg.prepend_tgt_lang_tag and args.prefix_size != 1:
+            raise ValueError(
+                'Please set "--prefix-size 1" since '
+                "target language ID token is prepended as BOS."
+            )
+        lang_token_ids = {
+            i
+            for s, i in self.tgt_dict.indices.items()
+            if SpeechToTextDataset.is_lang_tag(s)
+        }
+        if len(lang_token_ids) == 0:
+            lang_token_ids = {
+            i for s, i in self.tgt_dict.indices.items() 
+            if SpeechToTextJointMaskedDataset.is_lang_tag_mbart(s)
+        }
+        if extra_gen_cls_kwargs is None:
+            extra_gen_cls_kwargs = {"symbols_to_strip_from_output": lang_token_ids}
+        else:
+            extra_gen_cls_kwargs["symbols_to_strip_from_output"] = lang_token_ids
+        logging.info(f"symbols_to_strip_from_output: {extra_gen_cls_kwargs}")
+        
+        return super().build_generator(
+            models, args, seq_gen_cls=None, extra_gen_cls_kwargs=extra_gen_cls_kwargs
+        )

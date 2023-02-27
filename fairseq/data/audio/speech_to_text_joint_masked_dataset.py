@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import logging
+import re
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional, NamedTuple
@@ -95,20 +96,6 @@ class SpeechToTextJointMaskedDataset(SpeechToTextJointDataset):
         self.tgt_langs = tgt_langs
         self.langs = langs # language symbols loaded from external txt file
 
-    # def get_lang_tag_idx(self, lang: str, dictionary: Dictionary, style="s2t"):
-    #     if style == "s2t":
-    #         lang_tag_idx = dictionary.index("<lang:{}>".format(lang))
-    #     elif style == "mbart":
-    #         for _lang_sym in self.langs: # change lang symbol to mBART's style
-    #             if lang in _lang_sym:
-    #                 lang = _lang_sym
-    #                 break
-    #         lang_tag_idx = dictionary.index("[{}]".format(lang))
-    #     else:
-    #         raise NotImplementedError
-    #     assert lang_tag_idx != dictionary.unk()
-    #     return lang_tag_idx
-
     def __getitem__(self, index: int) -> SpeechToTextJointMaskedDatasetItem:
         s2t_joint_dataset_item = super().__getitem__(index) 
         if self.text_encoder_langtok is not None:
@@ -152,6 +139,11 @@ class SpeechToTextJointMaskedDataset(SpeechToTextJointDataset):
             masked_src_txt_tokens=masked_src_tokens,
             masked_target=masked_target
         )
+
+    @classmethod
+    def is_lang_tag_mbart(cls, token):
+        pattern = "\[[a-z]{2}_[A-Z]{2}\]".replace("{}", "(.*)")
+        return re.match(pattern, token)
 
     def apply_mask(
         self,
