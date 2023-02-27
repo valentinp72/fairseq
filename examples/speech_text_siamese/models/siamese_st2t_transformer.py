@@ -262,7 +262,7 @@ class SiameseSpeechTextEncoders(FairseqEncoder):
         cfg = {
             "encoder_embed_dim": args.encoder_text_embed_dim,
             "spch_encoder_embed_dim": args.encoder_embed_dim,
-            "encoder_ffn_embed_dim": args.encoder_text_ffn_embed_dim,
+            "encoder_ffn_embed_dim": getattr(args, 'encoder_text_ffn_embed_dim', args.encoder_ffn_embed_dim),
             "encoder_layers": args.text_encoder_layers,
             "encoder_layerdrop": args.encoder_layerdrop,
             "encoder_attention_heads": args.encoder_attention_heads,
