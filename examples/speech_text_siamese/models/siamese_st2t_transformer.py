@@ -23,8 +23,10 @@ from fairseq.models.speech_to_text import (
     S2TTransformerEncoder,
     TransformerDecoderScriptable,
 )
+
+from examples.speech_text_joint_to_text.models.s2t_dualinputtransformer import SpeechEoSEncoder
 from fairseq.models.speech_to_text.s2t_transformer import Conv1dSubsampler
-from fairseq.modules import LayerNorm
+from fairseq.modules import LayerNorm, GradMultiply
 from fairseq.modules.fairseq_dropout import FairseqDropout
 from fairseq.data.data_utils import lengths_to_padding_mask
 from fairseq.models.transformer import TransformerEncoder
@@ -213,6 +215,7 @@ class SiameseSpeechTextEncoders(FairseqEncoder):
         self.use_linear_after_encoder = getattr(args, "use_linear_after_encoder", False)
         self.use_lm_head = getattr(args, "use_lm_head", False)
         self.do_mt = getattr(args, "do_mt", False)
+        self.enc_grad_mult = args.enc_grad_mult
 
     @classmethod
     def build_speech_encoder(cls, args):
@@ -245,10 +248,18 @@ class SiameseSpeechTextEncoders(FairseqEncoder):
         model_args = namedtuple("args", cfg.keys())(*cfg.values())
         if getattr(args, "use_w2v_encoder", False):
             spch_encoder = Wav2VecEncoderWithTransformer(model_args)
-        elif not getattr(args, "speech_encoder_with_adapter", False):
-            spch_encoder = S2TTransformerEncoder(model_args)
-        else:
+        elif getattr(args, "speech_encoder_with_adapter", False):
             spch_encoder = SpeechEncoderWithAdapter(model_args)
+        else:
+            spch_encoder = S2TTransformerEncoder(model_args)
+            if getattr(args, "add_speech_eos", False):
+                spch_encoder = SpeechEoSEncoder(
+                    spch_encoder,
+                    2 * len(args.conv_kernel_sizes.split(",")),
+                    args.input_feat_per_channel,
+                    adapter_type=getattr(args, "speech_encoder_adapter_type", "None"),
+                    adapter_dim=args.encoder_embed_dim,
+                )    
         return spch_encoder
 
     @classmethod
@@ -301,7 +312,16 @@ class SiameseSpeechTextEncoders(FairseqEncoder):
                 if isinstance(text_encoder, TransformerLinearEncoder):
                     text_encoder.main_encoder.layers[i] = spch_encoder.transformer_layers[i]
                 else:
-                    text_encoder.layers[i] = spch_encoder.transformer_layers[i]
+                    if isinstance(spch_encoder, SpeechEoSEncoder):
+                        spch_encoder.encoder.transformer_layers[i] = text_encoder.layers[i]
+                    else:
+                        spch_encoder.transformer_layers[i] = text_encoder.layers[i]
+            if isinstance(spch_encoder, SpeechEoSEncoder):
+                spch_encoder.encoder.layer_norm.weight = text_encoder.layer_norm.weight
+                spch_encoder.encoder.layer_norm.bias = text_encoder.layer_norm.bias
+            else:
+                spch_encoder.layer_norm.weight = text_encoder.layer_norm.weight
+                spch_encoder.layer_norm.bias = text_encoder.layer_norm.bias
 
         if num_layers_shared_text_encoder > 0:
             start = shared_order_text_encoder
@@ -313,6 +333,12 @@ class SiameseSpeechTextEncoders(FairseqEncoder):
                 text_encoder.layers[i] = text_encoder_shared.layers[i]
 
         return text_encoder
+
+    def mult_rst_grad(self, rst, ratio):
+        assert isinstance(rst, dict)  # instead of EncoderOut
+        assert len(rst["encoder_out"]) == 1
+        rst["encoder_out"][0] = GradMultiply.apply(rst["encoder_out"][0], ratio)
+        return rst
 
     def forward(
         self,
@@ -344,8 +370,8 @@ class SiameseSpeechTextEncoders(FairseqEncoder):
         ret3 = None
         if src_tokens is not None and self.spch_encoder is not None:
             ret1 = self.spch_encoder(src_tokens, src_lengths)
-        if masked_src_txt_tokens is not None and self.text_encoder is not None:
-            ret2 = self.text_encoder(masked_src_txt_tokens, masked_src_lengths)
+        if src_txt_tokens is not None and self.text_encoder is not None:
+            ret2 = self.text_encoder(src_txt_tokens, masked_src_lengths)
         if src_txt_tokens is not None and self.text_encoder_aux is not None:
             ret3 = self.text_encoder_aux(src_txt_tokens, src_txt_lengths)
 
@@ -356,6 +382,9 @@ class SiameseSpeechTextEncoders(FairseqEncoder):
                 return rst1 if rst2 is None else (rst1, rst2)
             elif rst2 is None:
                 return rst1 if rst3 is None else (rst1, rst3)
+            if self.enc_grad_mult != 1 and self.training:
+                rst1 = self.mult_rst_grad(rst1, self.enc_grad_mult)
+                rst2 = self.mult_rst_grad(rst2, self.enc_grad_mult)
             return (rst1, rst2, rst3)
 
         return merge_output(ret1, ret2, ret3)
@@ -406,62 +435,70 @@ class MultiOutputDecoder(FairseqDecoder):
         encoder_out, 
         masked_tokens=None,
         incremental_state=None,
+        has_txt_input=False,
         **kwargs
     ):
         speech_dec_out = None
         ctc_out = None
         text_dec_out = None
 
-        speech_enc_out = encoder_out[0] if isinstance(encoder_out, tuple) else encoder_out
-        if self.speech_decoder is not None and speech_enc_out is not None:
-            speech_dec_out = self.speech_decoder(
-                prev_output_tokens,
-                encoder_out=speech_enc_out,
-                incremental_state=incremental_state,
-                **kwargs
-            )
-        if self.ctc_module is not None and speech_enc_out is not None:
-            ctc_out = self.ctc_module(
-                encoder_out=speech_enc_out,
-                **kwargs
-            )
-        if self.text_decoder is not None:
-            encoder_out = encoder_out if isinstance(encoder_out, tuple) else (None, encoder_out)
-            if not isinstance(self.text_decoder, RobertaLMHead):
-                text_dec_out = self.text_decoder(
+        if isinstance(encoder_out, tuple):  # training with mulitple input
+            speech_enc_out = encoder_out[0] if isinstance(encoder_out, tuple) else encoder_out
+            if self.speech_decoder is not None and speech_enc_out is not None:
+                speech_dec_out = self.speech_decoder(
                     prev_output_tokens,
-                    encoder_out=encoder_out[-1],
+                    encoder_out=speech_enc_out,
                     incremental_state=incremental_state,
                     **kwargs
                 )
-            else:
-                if masked_tokens is not None:
+            if self.ctc_module is not None and speech_enc_out is not None:
+                ctc_out = self.ctc_module(
+                    encoder_out=speech_enc_out,
+                    **kwargs
+                )
+            if self.text_decoder is not None:
+                encoder_out = encoder_out if isinstance(encoder_out, tuple) else (None, encoder_out)
+                if not isinstance(self.text_decoder, RobertaLMHead):
                     text_dec_out = self.text_decoder(
-                        encoder_out[1]["encoder_out"][0].transpose(0, 1), # T x B x C -> B x T x C
-                        masked_tokens,
+                        prev_output_tokens,
+                        encoder_out=encoder_out[1],
+                        incremental_state=incremental_state,
+                        **kwargs
                     )
-                text_dec_out = (text_dec_out, {})
+                else:
+                    if masked_tokens is not None:
+                        text_dec_out = self.text_decoder(
+                            encoder_out[1]["encoder_out"][0].transpose(0, 1), # T x B x C -> B x T x C
+                            masked_tokens,
+                        )
+                    text_dec_out = (text_dec_out, {})
 
-        def merge_output(res1, res2, res3):
-            """merging outputs of 3 decoders, each is Tuple[Tensor, Dict]"""
-            out = [None] * 3
-            for i, r in enumerate([res1, res2, res3]):
-                if r is not None:
-                    out[i] = r[0]
-            if res1 is None:
-                out_dict = res3[1]
-                return tuple(out), out_dict
-            if res3 is None:
-                out_dict = res1[1]
-                return tuple(out), out_dict
-            return tuple(out), res1[1]
-        
-        if masked_tokens is not None:
-            return merge_output(speech_dec_out, ctc_out, text_dec_out)
+            def merge_output(res1, res2, res3):
+                """merging outputs of 3 decoders, each is Tuple[Tensor, Dict]"""
+                out = [None] * 3
+                for i, r in enumerate([res1, res2, res3]):
+                    if r is not None:
+                        out[i] = r[0]
+                if res1 is None:
+                    out_dict = res3[1]
+                    return tuple(out), out_dict
+                if res3 is None:
+                    out_dict = res1[1]
+                    return tuple(out), out_dict
+                return tuple(out), res1[1]
+            
+            if sum(i is not None for i in [speech_dec_out, ctc_out, text_dec_out]) > 1:
+                return merge_output(speech_dec_out, ctc_out, text_dec_out)
+            else:
+                return (speech_dec_out if speech_dec_out is not None 
+                        else ctc_out if ctc_out is not None 
+                        else text_dec_out)
         else:
-            return (speech_dec_out if speech_dec_out is not None 
-                    else ctc_out if ctc_out is not None 
-                    else text_dec_out)
+            if has_txt_input:
+                return self.text_decoder(
+                    prev_output_tokens, encoder_out, incremental_state
+                )
+            return self.speech_decoder(prev_output_tokens, encoder_out, incremental_state)
 
 
 @register_model("siamese_st2t_transformer")
@@ -877,6 +914,22 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
             default=None,
             help="speech encoder layer to insert CTC module"
         )
+        parser.add_argument(
+            "--share-speech-dec-text-dec",
+            action="store_true"
+        )
+        parser.add_argument(
+            "--enc-grad-mult",
+            type=float,
+            metavar="V",
+            default=1.0,
+            help="multiply enc1 and enc2 gradient by V",
+        )
+        parser.add_argument(
+            "--add-speech-eos",
+            action="store_true",
+            help="add eos token at the end of input feature",
+        )
 
 
     @classmethod
@@ -908,7 +961,8 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
             ckpt_component_type = ["encoder.spch_encoder"] \
                 if any([key.startswith("encoder.spch_encoder") for key in state["model"].keys()]) else ["encoder"]
             checkpoint_utils.load_pretrained_component_from_model_different_keys(
-                spch_encoder, state, ckpt_component_types=ckpt_component_type)
+                spch_encoder.encoder if isinstance(spch_encoder, SpeechEoSEncoder) else spch_encoder, 
+                state, ckpt_component_types=ckpt_component_type)
             logging.info(f"Loaded pretrained speech encoder from {args.load_pretrain_speech_encoder}")
 
         if getattr(args, "load_pretrain_text_encoder", "") != "":
@@ -923,25 +977,25 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
             )
             logging.info(f"Loaded pretrained text encoder from {args.load_pretrain_text_encoder}")
 
-        if getattr(args, "load_pretrain_text_encoder_last", "") != "":
-            # if share encoder, speech encoder parameters will be used.
-            # It provides a chance to use pre-trained mt encoder instead
-            logging.info(f"Loading pretrained text encoder last ...")
-            state = checkpoint_utils.load_checkpoint_to_cpu(args.load_pretrain_text_encoder_last)
-            # check if language pairs in state
-            multi_dec = False
-            lang_pair = None
-            for key in state["model"].keys():
-                multi_dec = True if len(key.split(".")[1].split("-")) == 2 else False
-                lang_pair = key.split(".")[1]
-                if multi_dec:
-                    break    
-            ckpt_component_type = [f"models.{lang_pair}.encoder", "models.encoder"] \
-                if multi_dec else ["models.encoder"]
-            checkpoint_utils.load_pretrained_component_from_model_different_keys(
-                    text_encoder_aux if text_encoder_aux is not None else text_encoder, 
-                    state, ckpt_component_types=ckpt_component_type)
-            logging.info(f"Loaded pretrained text encoder last from {args.load_pretrain_text_encoder_last}")
+        # if getattr(args, "load_pretrain_text_encoder_last", "") != "":
+        #     # if share encoder, speech encoder parameters will be used.
+        #     # It provides a chance to use pre-trained mt encoder instead
+        #     logging.info(f"Loading pretrained text encoder last ...")
+        #     state = checkpoint_utils.load_checkpoint_to_cpu(args.load_pretrain_text_encoder_last)
+        #     # check if language pairs in state
+        #     multi_dec = False
+        #     lang_pair = None
+        #     for key in state["model"].keys():
+        #         multi_dec = True if len(key.split(".")[1].split("-")) == 2 else False
+        #         lang_pair = key.split(".")[1]
+        #         if multi_dec:
+        #             break    
+        #     ckpt_component_type = [f"models.{lang_pair}.encoder", "models.encoder"] \
+        #         if multi_dec else ["models.encoder"]
+        #     checkpoint_utils.load_pretrained_component_from_model_different_keys(
+        #             text_encoder_aux if text_encoder_aux is not None else text_encoder, 
+        #             state, ckpt_component_types=ckpt_component_type)
+        #     logging.info(f"Loaded pretrained text encoder last from {args.load_pretrain_text_encoder_last}")
 
         if getattr(args, "use_w2v_encoder", False) and getattr(args, "freeze_w2v_encoder", False):
             logging.info(f"Freezeing wav2vec encoder ...")
@@ -1131,6 +1185,10 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
                     logging.info(f"- freezing {n}")
                     p.requires_grad = False
 
+        if getattr(args, "share_speech_dec_text_dec", None) is not None:
+            logging.info(f"Sharing speech and text decoder ...")
+            speech_decoder = text_decoder
+
         if num_outputs == 0:
             decoder = DummyDecoder(task.source_dictionary)
         elif num_outputs >= 2:
@@ -1233,6 +1291,12 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
         if self.encoder.do_mt:
             masked_src_txt_tokens = src_txt_tokens
             masked_src_lengths = src_txt_lengths
+        if mode == "text":
+            assert src_txt_tokens is None
+            src_txt_tokens = src_tokens
+            src_txt_lengths = src_lengths
+            src_tokens = None
+            src_lengths = None
 
         encoder_out = self.encoder(
             src_tokens,
@@ -1243,14 +1307,17 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
             masked_src_lengths=masked_src_lengths,
             **kwargs
         )
-        if isinstance(self.decoder, DummyDecoder):
-            return None, encoder_out
+
+        has_txt_input = True if src_txt_tokens is not None else False
         
-        if isinstance(self.decoder, MultiOutputDecoder):
+        if isinstance(self.decoder, DummyDecoder):
+            return None, encoder_out 
+        elif isinstance(self.decoder, MultiOutputDecoder):
             decoder_out = self.decoder(
                 prev_output_tokens,
                 encoder_out=encoder_out,
                 masked_tokens=masked_tokens,
+                has_txt_input=has_txt_input,
                 **kwargs
             )
         elif isinstance(self.decoder, TransformerDecoderScriptable):
@@ -1437,6 +1504,8 @@ def siamese_st2t_transformer_base(args):
     args.speech_encoder_layers = getattr(args, "speech_encoder_layers", 12)
     args.text_encoder_layers = getattr(args, "text_encoder_layers", 6)
     args.decoder_layers = getattr(args, "decoder_layers", 6)
+
+    args.add_speech_eos = getattr(args, "add_speech_eos", False)
 
 
 @register_model_architecture("siamese_st2t_transformer", "siamese_st2t_transformer_s")
