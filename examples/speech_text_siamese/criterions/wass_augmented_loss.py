@@ -327,9 +327,9 @@ class CtcWassersteinCriterion(CtcCriterion):
 
     def _forward_main(self, model, sample, reduce=True):
         net_input = sample["net_input"]
-        text_mode = True if "src_tokens" not in net_input else False
+        text_mode_only = False if net_input['src_tokens'] is not None and net_input.get('src_txt_tokens') is not None else True
         masked_tokens = None
-        if sample["masked_target"] is not None:
+        if getattr(sample, "masked_target", None) is not None:
             masked_tokens = sample["masked_target"].ne(self.pad_idx)
 
         net_output, encoder_out = model(
@@ -337,13 +337,13 @@ class CtcWassersteinCriterion(CtcCriterion):
             masked_tokens=masked_tokens,
             use_encoder_outputs=True
         )
-        if text_mode:
-            sample_size = (net_input["masked_src_txt_tokens"].size(0) 
+        if text_mode_only:
+            sample_size = (net_input["src_txt_tokens"].size(0) 
                                 if self.sentence_avg else sample["ntokens"])
         else:
             sample_size = (net_input["src_tokens"].size(0) 
                                 if self.sentence_avg else sample["ntokens"])
-        extra = (text_mode, masked_tokens, net_input)
+        extra = (text_mode_only, masked_tokens, net_input)
 
         return net_output, encoder_out, sample_size, extra
 
@@ -394,19 +394,24 @@ class CtcWassersteinCriterion(CtcCriterion):
             if self.attn_weight_speech > 0.0:
                 ce_loss_speech, extra = self.compute_ce_loss(
                     model, net_output, sample, extra, reduce=reduce, idx=0,
-                )
+                )# if more than 1 decoder output: (speech_decoder_out, ctc_out, text_decoder_out)
                 loss += self.attn_weight_speech * ce_loss_speech
             if self.ctc_weight > 0.0:
                 ctc_loss, extra = self.compute_ctc_loss(
                     model, net_output, encoder_out, net_input, extra
                 )
                 loss += self.ctc_weight * ctc_loss
-
-        if self.attn_weight_text > 0.0:
-            ce_loss_text, extra = self.compute_ce_loss(
-                model, net_output, sample, extra, reduce=reduce, idx=2,
-            )
-            loss += self.attn_weight_text * ce_loss_text
+            if self.attn_weight_text > 0.0:
+                ce_loss_text, extra = self.compute_ce_loss(
+                    model, net_output, sample, extra, reduce=reduce, idx=2,
+                )
+                loss += ce_loss_text
+        else:
+            if self.attn_weight_text > 0.0:
+                ce_loss_text, extra = self.compute_ce_loss(
+                    model, net_output, sample, extra, reduce=reduce, idx=2,
+                )
+                loss += self.attn_weight_text * ce_loss_text
 
         if self.mlm_weight > 0.0:
             mlm_loss, extra = self.compute_mlm_loss(
