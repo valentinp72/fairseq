@@ -21,11 +21,17 @@ from fairseq.data import (
     NumelDataset,
     NumSamplesDataset,
     IdDataset,
+    ConcatDataset,
+    TransformEosLangPairDataset,
+    ResamplingDataset,
 )
 from fairseq.file_io import PathManager
 from fairseq.data.audio.multi_modality_dataset import (
     MultiModalityDataset,
     ModalityDatasetItem,
+)
+from fairseq.data.audio.speech_to_text_dataset import (
+    SpeechToTextDataset, SpeechToTextDatasetCreator
 )
 from fairseq.data.audio.speech_to_text_joint_dataset import (
     S2TJointDataConfig, SpeechToTextDataset,
@@ -33,13 +39,20 @@ from fairseq.data.audio.speech_to_text_joint_dataset import (
 from fairseq.data.audio.speech_to_text_joint_masked_dataset import (
     SpeechToTextJointMaskedDatasetCreator, SpeechToTextJointMaskedDataset,
 )
+from fairseq.data.audio.multi_modality_dataset import (
+    MultiModalityDataset,
+    LangPairMaskDataset,
+    ModalityDatasetItem,
+)
 from fairseq.data.shorten_dataset import maybe_shorten_dataset
 from fairseq.tasks import register_task
-from examples.speech_text_joint_to_text.tasks.speech_text_joint import SpeechTextJointToTextTask
+from examples.speech_text_joint_to_text.tasks.speech_text_joint import (
+    SpeechTextJointToTextTask,
+)
+from fairseq.tasks.translation import load_langpair_dataset
 
 
 logger = logging.getLogger(__name__)
-
 
 @register_task("siamese_speech_text_to_text")
 class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
@@ -103,9 +116,14 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
             help="path to monolingual text data directory",
         )
         parser.add_argument(
+            "--parallel-text-data",
+            default="",
+            help="path to monolingual text data directory",
+        )
+        parser.add_argument(
             "--max-tokens-text",
             type=int,
-            default=512,
+            default=400,
             metavar="N",
             help="maximum tokens for encoder text input ",
         )
@@ -129,6 +147,30 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
             type=float,
             metavar="N",
             help="",
+        )
+        parser.add_argument(
+            "--mask-text-ratio",
+            type=float,
+            metavar="V",
+            default=0.0,
+            help="mask V source tokens for text only mode",
+        )
+        parser.add_argument(
+            "--mask-text-type",
+            default="random",
+            choices=["random", "tail"],
+            help="mask text typed",
+        )
+        parser.add_argument(
+            "--noise-token",
+            default="",
+            help="noise token for masking src text tokens if mask-text-ratio > 0",
+        )
+        parser.add_argument(
+            "--langpairs",
+            default=None,
+            metavar="S",
+            help='language pairs for text training, separated with ","',
         )
         parser.add_argument('--text-encoder-langtok', default=None, type=str, choices=['src', 'tgt'],
                             metavar='SRCTGT',
@@ -180,7 +222,7 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
             f"target dictionary size ({data_cfg.vocab_filename}): " f"{len(tgt_dict):,}")
         
         langs = None
-        if args.lang_dict:
+        if args.lang_dict: # for init using mbart models
             with open(
                 PathManager.get_local_path(args.lang_dict), "r", encoding="utf-8"
             ) as f:
@@ -195,6 +237,16 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
                 logging.info(f'lang {lang} has idx {src_dict.index("[{}]".format(lang))}')
             src_dict.add_symbol("<mask>")
             tgt_dict.add_symbol("<mask>")
+
+        if args.parallel_text_data != "":
+            if not os.path.isabs(args.parallel_text_data):
+                args.parallel_text_data = os.path.join(
+                    args.data, args.parallel_text_data
+                )
+            if args.langpairs is None:
+                raise Exception(
+                    "Could not infer language pair, please provide it explicitly"
+                )
 
         return cls(args, src_dict, tgt_dict, langs)
 
@@ -275,6 +327,54 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
         )
         return text_dataset
 
+    def load_langpair_dataset(self, prepend_tgt_lang_tag=False, sampling_alpha=1.0, epoch=0):
+        lang_pairs = []
+        text_dataset = None
+        split = "train"
+        for lp in self.args.langpairs.split(","):
+            src, tgt = lp.split("-")
+            text_dataset = load_langpair_dataset(
+                self.args.parallel_text_data,
+                split,
+                src,
+                self.src_dict,
+                tgt,
+                self.tgt_dict,
+                combine=True,
+                dataset_impl=None,
+                upsample_primary=1,
+                left_pad_source=False,
+                left_pad_target=False,
+                max_source_positions=self.args.max_positions_text,
+                max_target_positions=self.args.max_target_positions,
+                load_alignments=False,
+                truncate_source=False,
+            )
+            if prepend_tgt_lang_tag:
+                # TODO
+                text_dataset = TransformEosLangPairDataset(
+                    text_dataset,
+                    src_eos=self.src_dict.eos(),
+                    tgt_bos=self.tgt_dict.eos(),  # 'prev_output_tokens' starts with eos
+                    new_tgt_bos=self.tgt_dict.index(SpeechToTextDataset.LANG_TAG_TEMPLATE.format(tgt)),
+                )
+            lang_pairs.append(text_dataset)
+        if len(lang_pairs) > 1:
+            if sampling_alpha != 1.0:
+                size_ratios = SpeechToTextDatasetCreator.get_size_ratios(
+                    self.args.langpairs.split(","),
+                    [len(s) for s in lang_pairs],
+                    alpha=sampling_alpha,
+                )
+                lang_pairs = [
+                    ResamplingDataset(
+                        d, size_ratio=r, epoch=epoch, replace=(r >= 1.0)
+                    )
+                    for d, r in zip(lang_pairs, size_ratios)
+                ]
+            return ConcatDataset(lang_pairs)
+        return text_dataset
+
     def load_dataset(self, split, epoch=1, combine=False, **kwargs):
         is_train_split = split.startswith("train")
         pre_tokenizer = self.build_tokenizer(self.args)
@@ -302,9 +402,27 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
             # decoder_langtok=self.args.decoder_langtok,
             langs=self.langs,
         )
+        noise_token_id = -1
         text_dataset = None
         if self.args.monolingual_text_data != "" and is_train_split:
             text_dataset = self.load_monolingual_dataset(split, epoch=epoch)
+        if self.args.parallel_text_data != "" and is_train_split:
+            text_dataset = self.load_langpair_dataset(False, 1.0, epoch=epoch)
+            if self.args.mask_text_ratio > 0:
+                # add mask
+                noise_token_id = (
+                    self.src_dict.unk()
+                    if self.args.noise_token == ""
+                    else self.src_dict.index(self.args.noise_token)
+                )
+                text_dataset = LangPairMaskDataset(
+                    text_dataset,
+                    src_bos=self.src_dict.bos(),
+                    src_eos=self.src_dict.eos(),
+                    noise_id=noise_token_id,
+                    mask_ratio=self.args.mask_text_ratio,
+                    mask_type=self.args.mask_text_type,
+                )
         if text_dataset is not None:
             mdsets = [
                 ModalityDatasetItem(
@@ -331,34 +449,34 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
         for this task)."""
         return self.src_dict
 
-    def build_generator(
-        self,
-        models,
-        args,
-        seq_gen_cls=None,
-        extra_gen_cls_kwargs=None,
-    ):
-        if self.data_cfg.prepend_tgt_lang_tag and args.prefix_size != 1:
-            raise ValueError(
-                'Please set "--prefix-size 1" since '
-                "target language ID token is prepended as BOS."
-            )
-        lang_token_ids = {
-            i
-            for s, i in self.tgt_dict.indices.items()
-            if SpeechToTextDataset.is_lang_tag(s)
-        }
-        if len(lang_token_ids) == 0:
-            lang_token_ids = {
-            i for s, i in self.tgt_dict.indices.items() 
-            if SpeechToTextJointMaskedDataset.is_lang_tag_mbart(s)
-        }
-        if extra_gen_cls_kwargs is None:
-            extra_gen_cls_kwargs = {"symbols_to_strip_from_output": lang_token_ids}
-        else:
-            extra_gen_cls_kwargs["symbols_to_strip_from_output"] = lang_token_ids
-        logging.info(f"symbols_to_strip_from_output: {extra_gen_cls_kwargs}")
+    # def build_generator(
+    #     self,
+    #     models,
+    #     args,
+    #     seq_gen_cls=None,
+    #     extra_gen_cls_kwargs=None,
+    # ):
+    #     if self.data_cfg.prepend_tgt_lang_tag and args.prefix_size != 1:
+    #         raise ValueError(
+    #             'Please set "--prefix-size 1" since '
+    #             "target language ID token is prepended as BOS."
+    #         )
+    #     lang_token_ids = {
+    #         i
+    #         for s, i in self.tgt_dict.indices.items()
+    #         if SpeechToTextDataset.is_lang_tag(s)
+    #     }
+    #     if len(lang_token_ids) == 0:
+    #         lang_token_ids = {
+    #         i for s, i in self.tgt_dict.indices.items() 
+    #         if SpeechToTextJointMaskedDataset.is_lang_tag_mbart(s)
+    #     }
+    #     if extra_gen_cls_kwargs is None:
+    #         extra_gen_cls_kwargs = {"symbols_to_strip_from_output": lang_token_ids}
+    #     else:
+    #         extra_gen_cls_kwargs["symbols_to_strip_from_output"] = lang_token_ids
+    #     logging.info(f"symbols_to_strip_from_output: {extra_gen_cls_kwargs}")
         
-        return super().build_generator(
-            models, args, seq_gen_cls=None, extra_gen_cls_kwargs=extra_gen_cls_kwargs
-        )
+    #     return super().build_generator(
+    #         models, args, seq_gen_cls=None, extra_gen_cls_kwargs=extra_gen_cls_kwargs
+    #     )
