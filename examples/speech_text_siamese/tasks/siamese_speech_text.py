@@ -238,7 +238,7 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
             src_dict.add_symbol("<mask>")
             tgt_dict.add_symbol("<mask>")
 
-        if args.parallel_text_data != "":
+        if getattr(args, "parallel_text_data", None):
             if not os.path.isabs(args.parallel_text_data):
                 args.parallel_text_data = os.path.join(
                     args.data, args.parallel_text_data
