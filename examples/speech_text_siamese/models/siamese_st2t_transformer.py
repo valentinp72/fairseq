@@ -215,7 +215,7 @@ class SiameseSpeechTextEncoders(FairseqEncoder):
         self.use_linear_after_encoder = getattr(args, "use_linear_after_encoder", False)
         self.use_lm_head = getattr(args, "use_lm_head", False)
         self.do_mt = getattr(args, "do_mt", False)
-        self.enc_grad_mult = args.enc_grad_mult
+        self.enc_grad_mult = getattr(args, "enc_grad_mult", False)
 
     @classmethod
     def build_speech_encoder(cls, args):
