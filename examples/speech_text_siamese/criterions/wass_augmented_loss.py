@@ -401,17 +401,12 @@ class CtcWassersteinCriterion(CtcCriterion):
                     model, net_output, encoder_out, net_input, extra
                 )
                 loss += self.ctc_weight * ctc_loss
-            if self.attn_weight_text > 0.0:
-                ce_loss_text, extra = self.compute_ce_loss(
-                    model, net_output, sample, extra, reduce=reduce, idx=2,
-                )
-                loss += ce_loss_text
-        else:
-            if self.attn_weight_text > 0.0:
-                ce_loss_text, extra = self.compute_ce_loss(
-                    model, net_output, sample, extra, reduce=reduce, idx=2,
-                )
-                loss += self.attn_weight_text * ce_loss_text
+
+        if self.attn_weight_text > 0.0:
+            ce_loss_text, extra = self.compute_ce_loss(
+                model, net_output, sample, extra, reduce=reduce, idx=2,
+            )
+            loss += self.attn_weight_text * ce_loss_text
 
         if self.mlm_weight > 0.0:
             mlm_loss, extra = self.compute_mlm_loss(
