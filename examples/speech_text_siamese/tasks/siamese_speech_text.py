@@ -398,7 +398,7 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
             mask_prob=self.args.mask_prob,
             mask_multiple_length=int(self.args.mask_multiple_length),
             speech_only=self.speech_only,
-            text_encoder_langtok=self.args.text_encoder_langtok,
+            text_encoder_langtok=getattr(self.args, "text_encoder_langtok", None),
             # decoder_langtok=self.args.decoder_langtok,
             langs=self.langs,
         )
@@ -406,7 +406,7 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
         text_dataset = None
         if self.args.monolingual_text_data != "" and is_train_split:
             text_dataset = self.load_monolingual_dataset(split, epoch=epoch)
-        if self.args.parallel_text_data != "" and is_train_split:
+        if getattr(self.args, "parallel_text_data", "") and is_train_split:
             text_dataset = self.load_langpair_dataset(False, 1.0, epoch=epoch)
             if self.args.mask_text_ratio > 0:
                 # add mask
