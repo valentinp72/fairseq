@@ -222,7 +222,7 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
             f"target dictionary size ({data_cfg.vocab_filename}): " f"{len(tgt_dict):,}")
         
         langs = None
-        if args.lang_dict: # for init using mbart models
+        if getattr(args, "lang_dict", None): # for init using mbart models
             with open(
                 PathManager.get_local_path(args.lang_dict), "r", encoding="utf-8"
             ) as f:
