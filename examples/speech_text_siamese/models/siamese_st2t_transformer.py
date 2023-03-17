@@ -977,25 +977,25 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
             )
             logging.info(f"Loaded pretrained text encoder from {args.load_pretrain_text_encoder}")
 
-        # if getattr(args, "load_pretrain_text_encoder_last", "") != "":
-        #     # if share encoder, speech encoder parameters will be used.
-        #     # It provides a chance to use pre-trained mt encoder instead
-        #     logging.info(f"Loading pretrained text encoder last ...")
-        #     state = checkpoint_utils.load_checkpoint_to_cpu(args.load_pretrain_text_encoder_last)
-        #     # check if language pairs in state
-        #     multi_dec = False
-        #     lang_pair = None
-        #     for key in state["model"].keys():
-        #         multi_dec = True if len(key.split(".")[1].split("-")) == 2 else False
-        #         lang_pair = key.split(".")[1]
-        #         if multi_dec:
-        #             break    
-        #     ckpt_component_type = [f"models.{lang_pair}.encoder", "models.encoder"] \
-        #         if multi_dec else ["models.encoder"]
-        #     checkpoint_utils.load_pretrained_component_from_model_different_keys(
-        #             text_encoder_aux if text_encoder_aux is not None else text_encoder, 
-        #             state, ckpt_component_types=ckpt_component_type)
-        #     logging.info(f"Loaded pretrained text encoder last from {args.load_pretrain_text_encoder_last}")
+        if getattr(args, "load_pretrain_text_encoder_last", "") != "":
+            # if share encoder, speech encoder parameters will be used.
+            # It provides a chance to use pre-trained mt encoder instead
+            logging.info(f"Loading pretrained text encoder last ...")
+            state = checkpoint_utils.load_checkpoint_to_cpu(args.load_pretrain_text_encoder_last)
+            # check if language pairs in state
+            multi_dec = False
+            lang_pair = None
+            for key in state["model"].keys():
+                multi_dec = True if len(key.split(".")[1].split("-")) == 2 else False
+                lang_pair = key.split(".")[1]
+                if multi_dec:
+                    break    
+            ckpt_component_type = [f"models.{lang_pair}.encoder", "models.encoder"] \
+                if multi_dec else ["models.encoder"]
+            checkpoint_utils.load_pretrained_component_from_model_different_keys(
+                    text_encoder_aux if text_encoder_aux is not None else text_encoder, 
+                    state, ckpt_component_types=ckpt_component_type)
+            logging.info(f"Loaded pretrained text encoder last from {args.load_pretrain_text_encoder_last}")
 
         if getattr(args, "use_w2v_encoder", False) and getattr(args, "freeze_w2v_encoder", False):
             logging.info(f"Freezeing wav2vec encoder ...")

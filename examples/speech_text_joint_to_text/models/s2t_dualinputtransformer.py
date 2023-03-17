@@ -851,9 +851,25 @@ class DualInputS2TTransformerModel(FairseqEncoderDecoderModel):
             args.load_pretrain_text_encoder_last != ""
         ):  # if share encoder, speech encoder parameters will be used.
             # It provides a chance to use pre-trained mt encoder instead
-            checkpoint_utils.load_pretrained_component_from_model(
-                text_encoder, args.load_pretrain_text_encoder_last
-            )
+            try:
+                checkpoint_utils.load_pretrained_component_from_model(
+                    text_encoder, args.load_pretrain_text_encoder_last
+                )
+            except:
+                state = checkpoint_utils.load_checkpoint_to_cpu(args.load_pretrain_text_encoder_last)
+                # check if language pairs in state
+                multi_dec = False
+                lang_pair = None
+                for key in state["model"].keys():
+                    multi_dec = True if len(key.split(".")[1].split("-")) == 2 else False
+                    lang_pair = key.split(".")[1]
+                    if multi_dec:
+                        break    
+                ckpt_component_type = [f"models.{lang_pair}.encoder", "models.encoder"] \
+                    if multi_dec else ["models.encoder"]
+                checkpoint_utils.load_pretrained_component_from_model_different_keys(
+                        text_encoder, 
+                        state, ckpt_component_types=ckpt_component_type)
             logging.info(f"Loaded pretrained text encoder last from {args.load_pretrain_text_encoder_last}")
 
         if args.load_pretrain_encoder != "":
