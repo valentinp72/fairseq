@@ -313,24 +313,27 @@ class SiameseSpeechTextEncoders(FairseqEncoder):
                     text_encoder.main_encoder.layers[i] = spch_encoder.transformer_layers[i]
                 else:
                     if isinstance(spch_encoder, SpeechEoSEncoder):
-                        spch_encoder.encoder.transformer_layers[i] = text_encoder.layers[i]
+                        text_encoder.layers[i] = spch_encoder.encoder.transformer_layers[i]
                     else:
-                        spch_encoder.transformer_layers[i] = text_encoder.layers[i]
+                        text_encoder.layers[i] = spch_encoder.transformer_layers[i]
             if isinstance(spch_encoder, SpeechEoSEncoder):
-                spch_encoder.encoder.layer_norm.weight = text_encoder.layer_norm.weight
-                spch_encoder.encoder.layer_norm.bias = text_encoder.layer_norm.bias
+                text_encoder.layer_norm.weight = spch_encoder.encoder.layer_norm.weight
+                text_encoder.layer_norm.bias = spch_encoder.encoder.layer_norm.bias
             else:
-                spch_encoder.layer_norm.weight = text_encoder.layer_norm.weight
-                spch_encoder.layer_norm.bias = text_encoder.layer_norm.bias
+                text_encoder.layer_norm.weight = spch_encoder.layer_norm.weight
+                text_encoder.layer_norm.bias = spch_encoder.layer_norm.bias
 
         if num_layers_shared_text_encoder > 0:
-            start = shared_order_text_encoder
-            end = num_layers_shared_text_encoder if start==0 else -num_layers_shared_text_encoder
-            if start == -1:
-                start = end
-                end = 0
-            for i in range(start, end):
-                text_encoder.layers[i] = text_encoder_shared.layers[i]
+            if num_layers_shared_text_encoder == text_encoder.num_layers:
+                text_encoder = text_encoder_shared
+            else:
+                start = shared_order_text_encoder
+                end = num_layers_shared_text_encoder if start==0 else -num_layers_shared_text_encoder
+                if start == -1:
+                    start = end
+                    end = 0
+                for i in range(start, end):
+                    text_encoder.layers[i] = text_encoder_shared.layers[i]
 
         return text_encoder
 
@@ -973,13 +976,16 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
             checkpoint_utils.load_pretrained_component_from_model_different_keys_v2(
                 text_encoder_aux if text_encoder_aux is not None else text_encoder,
                 state, ckpt_component_types=ckpt_component_type,
-                # exclude_layers=["embed_tokens", "embed_positions", "emb_layer_norm"]
             )
+            logging.info(f"Loaded pretrained text encoder aux from {args.load_pretrain_text_encoder}")
+            if text_encoder is not None: # load text encoder if have not done so
+                checkpoint_utils.load_pretrained_component_from_model_different_keys_v2(
+                text_encoder, state, ckpt_component_types=ckpt_component_type)
             logging.info(f"Loaded pretrained text encoder from {args.load_pretrain_text_encoder}")
 
         if getattr(args, "load_pretrain_text_encoder_last", "") != "":
-            # if share encoder, speech encoder parameters will be used.
-            # It provides a chance to use pre-trained mt encoder instead
+            # if share encoder, text encoder parameters will be used.
+            # This option is to load pre-trained mt encoder
             logging.info(f"Loading pretrained text encoder last ...")
             state = checkpoint_utils.load_checkpoint_to_cpu(args.load_pretrain_text_encoder_last)
             # check if language pairs in state
