@@ -390,17 +390,6 @@ class CtcWassersteinCriterion(CtcCriterion):
                 "cross_attn_loss": 0.0,
                 "match_loss": 0.0,
                 }
-        if not text_mode:
-            if self.attn_weight_speech > 0.0:
-                ce_loss_speech, extra = self.compute_ce_loss(
-                    model, net_output, sample, extra, reduce=reduce, idx=0,
-                )# if more than 1 decoder output: (speech_decoder_out, ctc_out, text_decoder_out)
-                loss += self.attn_weight_speech * ce_loss_speech
-            if self.ctc_weight > 0.0:
-                ctc_loss, extra = self.compute_ctc_loss(
-                    model, net_output, encoder_out, net_input, extra
-                )
-                loss += self.ctc_weight * ctc_loss
 
         if self.attn_weight_text > 0.0:
             ce_loss_text, extra = self.compute_ce_loss(
@@ -416,8 +405,20 @@ class CtcWassersteinCriterion(CtcCriterion):
                 extra,
             )
             loss += self.mlm_weight * mlm_loss
-        
+
         if not text_mode:
+            if self.attn_weight_speech > 0.0:
+                ce_loss_speech, extra = self.compute_ce_loss(
+                    model, net_output, sample, extra, reduce=reduce, idx=0,
+                )# if more than 1 decoder output: (speech_decoder_out, ctc_out, text_decoder_out)
+                loss += self.attn_weight_speech * ce_loss_speech
+
+            if self.ctc_weight > 0.0:
+                ctc_loss, extra = self.compute_ctc_loss(
+                    model, net_output, encoder_out, net_input, extra
+                )
+                loss += self.ctc_weight * ctc_loss
+        
             # if isinstance(encoder_out, tuple) and encoder_out[0] is not None:
             if self.match_loss_type == "dtw" and self.dtw_weight > 0.0 :
                 dtw_loss = self.compte_soft_dtw(self.soft_dtw_loss, 
@@ -429,7 +430,8 @@ class CtcWassersteinCriterion(CtcCriterion):
                                                 )
                 loss += self.dtw_weight * dtw_loss
                 extra["dtw_loss"] = dtw_loss
-            if self.ot_weight > 0.0: # for backward comparability
+
+            if self.ot_weight > 0.0:
                 if not self.compute_dist_decoder:
                     assert model.encoder.text_encoder_aux is not None
                 wass_loss = self.compute_wass_loss(self.ot_loss, 
@@ -500,6 +502,7 @@ class CtcWassersteinCriterion(CtcCriterion):
                 gen_loss = F.cross_entropy(predictions, fake_y)
                 loss += self.match_weight * gen_loss
                 extra["generator_loss"] = gen_loss
+
             if self.ot_weight_mt > 0.0 or self.ot_weight_st > 0.0:
                 if self.ot_weight_mt > 0.0:
                     assert model.encoder.text_encoder_aux is not None
@@ -528,9 +531,9 @@ class CtcWassersteinCriterion(CtcCriterion):
                                 lprobs.float().contiguous(),
                                 target.float().contiguous()
                             ).sum()
-
                     loss += wass_loss_st * self.ot_weight_st
                     extra["wass_loss_st"] = wass_loss_st
+
                 if self.ot_weight_mt > 0.0: # between text enc_out and dec_out
                     # wloss_mt = SamplesLoss(loss=self.ot_loss, 
                     #                         p=self.ot_p, 
