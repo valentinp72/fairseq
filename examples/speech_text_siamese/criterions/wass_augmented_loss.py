@@ -534,15 +534,18 @@ class CtcWassersteinCriterion(CtcCriterion):
                     loss += wass_loss_st * self.ot_weight_st
                     extra["wass_loss_st"] = wass_loss_st
 
-                if self.ot_weight_mt > 0.0: # between text enc_out and dec_out
-                    # wloss_mt = SamplesLoss(loss=self.ot_loss, 
-                    #                         p=self.ot_p, 
-                    #                         blur=self.ot_blur,
-                    #                         scaling=self.ot_scaling)
-                    wass_loss_mt = self.ot_loss(
-                        text_out.float().transpose(0, 1).contiguous(),
-                        net_output[1]["before_out_proj"].transpose(0, 1).contiguous()
-                    ).sum()
+                if self.ot_weight_mt > 0.0 and model.num_updates > 5000:
+                    # # between text enc_out and dec_out
+                    # wass_loss_mt = self.ot_loss(
+                    #     text_out.float().transpose(0, 1).contiguous(),
+                    #     net_output[1]["before_out_proj"].transpose(0, 1).contiguous()
+                    # ).sum()
+
+                    # between speech decoder and text decoder
+                    speech_dec_out = net_output[0][0]
+                    text_dec_out = net_output[0][-1].detach()
+                    wass_loss_mt = self.ot_loss(speech_dec_out.contiguous(),
+                                                text_dec_out.contiguous()).sum()
                     loss += wass_loss_mt * self.ot_weight_mt
                     extra["wass_loss_mt"] = wass_loss_mt
             if self.ot_weight_st_ctc:
