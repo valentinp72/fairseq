@@ -902,6 +902,11 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
             help="path to pre-trained wav2vec model"
         )
         parser.add_argument(
+            "--freeze-speech-encoder",
+            action="store_true",
+            help="freeze speech encoder"
+        )
+        parser.add_argument(
             "--freeze-speech-decoder",
             action="store_true",
             help="freeze speech decoder"
@@ -967,6 +972,12 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
                 spch_encoder.encoder if isinstance(spch_encoder, SpeechEoSEncoder) else spch_encoder, 
                 state, ckpt_component_types=ckpt_component_type)
             logging.info(f"Loaded pretrained speech encoder from {args.load_pretrain_speech_encoder}")
+
+        if getattr(args, "freeze_speech_encoder", False):
+            logging.info(f"Freezing speech encoder ...")
+            for n, p in spch_encoder.named_parameters():
+                logging.info(f"- freezing {n}")
+                p.requires_grad = False
 
         if getattr(args, "load_pretrain_text_encoder", "") != "":
             logging.info(f"Loading pretrained text encoder ...")
