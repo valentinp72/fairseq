@@ -230,6 +230,10 @@ class CtcWassersteinCriterionConfig(CtcCriterionConfig):
         default=False,
         metadata={"help": "Normalize before computing OT"},
     )
+    disable_st_update_num: int = field(
+        default=1,
+        metadata={"help": "number of steps not to update ST task"},
+    )
 
 
 @register_criterion("wasserstein_augmented_loss", dataclass=CtcWassersteinCriterionConfig)
@@ -249,6 +253,7 @@ class CtcWassersteinCriterion(CtcCriterion):
         self.match_weight = 0.0
         self.detach_text_enc = cfg.detach_text_enc
         self.discriminator = None
+        self.disable_st_update_num = cfg.disable_st_update_num
         if "l2" in self.match_loss_type:
             assert cfg.l2_weight > 0.0
             assert not (cfg.kl_weight > 0.0 or cfg.adversarial_weight > 0.0) 
@@ -407,7 +412,7 @@ class CtcWassersteinCriterion(CtcCriterion):
             loss += self.mlm_weight * mlm_loss
 
         if not text_mode:
-            if self.attn_weight_speech > 0.0:
+            if self.attn_weight_speech > 0.0 and model.num_updates >= self.disable_st_update_num:
                 ce_loss_speech, extra = self.compute_ce_loss(
                     model, net_output, sample, extra, reduce=reduce, idx=0,
                 )# if more than 1 decoder output: (speech_decoder_out, ctc_out, text_decoder_out)
@@ -417,7 +422,10 @@ class CtcWassersteinCriterion(CtcCriterion):
                 ctc_loss, extra = self.compute_ctc_loss(
                     model, net_output, encoder_out, net_input, extra
                 )
-                loss += self.ctc_weight * ctc_loss
+                if model.num_updates < self.disable_st_update_num:
+                    loss += ctc_loss
+                else:
+                    loss += self.ctc_weight * ctc_loss
         
             # if isinstance(encoder_out, tuple) and encoder_out[0] is not None:
             if self.match_loss_type == "dtw" and self.dtw_weight > 0.0 :
@@ -600,7 +608,7 @@ class CtcWassersteinCriterion(CtcCriterion):
                 extra["lprobs_ctc"], sample, net_input, extra["input_lengths"], logging_output)
 
         if self.report_accuracy:
-            if not text_mode and self.attn_weight_speech > 0.0:
+            if not text_mode and self.attn_weight_speech > 0.0 and model.num_updates >= self.disable_st_update_num:
                 n_correct, total = self.compute_accuracy(extra["lprobs_ce_speech"], extra["target"])
                 logging_output["n_correct_speech"] = utils.item(n_correct.data)
                 logging_output["total_speech"] = utils.item(total.data)

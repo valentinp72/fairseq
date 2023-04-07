@@ -445,7 +445,7 @@ class MultiOutputDecoder(FairseqDecoder):
         ctc_out = None
         text_dec_out = None
 
-        if sum(i is not None for i in [self.speech_decoder, self.ctc_module, self.text_decoder]) > 1:  # training with mulitple output
+        if sum(i is not None for i in [self.speech_decoder, self.ctc_module, self.text_decoder]) > 1 and self.training:  # training with mulitple output
             speech_enc_out = encoder_out[0] if isinstance(encoder_out, tuple) else encoder_out
             if self.speech_decoder is not None and speech_enc_out is not None:
                 speech_dec_out = self.speech_decoder(
