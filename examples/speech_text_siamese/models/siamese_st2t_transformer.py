@@ -988,11 +988,11 @@ class SiameseST2TTransformerModel(FairseqEncoderDecoderModel):
                 text_encoder_aux if text_encoder_aux is not None else text_encoder,
                 state, ckpt_component_types=ckpt_component_type,
             )
-            logging.info(f"Loaded pretrained text encoder aux from {args.load_pretrain_text_encoder}")
-            if text_encoder is not None: # load text encoder if have not done so
+            logging.info(f"Loaded pretrained text encoder_(aux) from {args.load_pretrain_text_encoder}")
+            if text_encoder is not None and text_encoder_aux is not None: # load text encoder if have not done so
                 checkpoint_utils.load_pretrained_component_from_model_different_keys_v2(
                 text_encoder, state, ckpt_component_types=ckpt_component_type)
-            logging.info(f"Loaded pretrained text encoder from {args.load_pretrain_text_encoder}")
+                logging.info(f"Loaded pretrained text encoder from {args.load_pretrain_text_encoder}")
 
         if getattr(args, "load_pretrain_text_encoder_last", "") != "":
             # if share encoder, text encoder parameters will be used.
