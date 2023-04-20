@@ -12,7 +12,9 @@ import logging
 import math
 import os
 import sys
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Dict, Optional, Any, List, Tuple, Callable
+import clonefuse as cf
+# from clonefuse import Block
 
 # We need to setup root logger before importing any fairseq libraries.
 logging.basicConfig(
@@ -94,6 +96,21 @@ def main(cfg: FairseqConfig) -> None:
             model = fsdp_wrap(task.build_model(cfg.model))
     else:
         model = task.build_model(cfg.model)
+    if cfg.common.clonefuse > 1:
+        logger.info(f"***** CLONE FUSING *****")
+        if cfg.common.clone_type == 'linear':
+            clonable_types = [torch.nn.Linear, torch.nn.modules.conv._ConvNd]
+        elif cfg.common.clone_type == 'block':
+            clonable_types = [Block]
+        elif cfg.common.clone_type == 'both':
+            clonable_types = [torch.nn.Linear, torch.nn.modules.conv._ConvNd, Block]
+        else:
+            raise NotImplementedError
+        model, param_map = cf.clone(model, clone_first=cfg.common.clone_first, clone_last=cfg.common.clone_last, 
+                                num_clones=cfg.common.clonefuse, clonable_types=clonable_types, sync_processes=True)
+        # if distributed:
+        #     ddp_find_unused_parameters = True
+
     criterion = task.build_criterion(cfg.criterion)
     logger.info(model)
     logger.info("task: {}".format(task.__class__.__name__))

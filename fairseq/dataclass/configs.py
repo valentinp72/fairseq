@@ -250,6 +250,22 @@ class CommonConfig(FairseqDataclass):
             "help": "path to run plasma_store, defaults to /tmp/plasma. Paths outside /tmp tend to fail."
         },
     )
+    clonefuse: int = field(
+        default=1,
+        metadata={"help": "closefuse"},
+    )
+    clone_last: int = field(
+        default=0,
+        metadata={"help": "closefuse"},
+    )
+    clone_first: int = field(
+        default=0,
+        metadata={"help": "closefuse"},
+    )
+    clone_type: Optional[str] = field(
+        default="linear",
+        metadata={"help": "closefuse"},
+    )
 
 
 @dataclass
