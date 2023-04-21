@@ -27,7 +27,10 @@ from fairseq.dataclass.utils import (
 from fairseq.distributed.fully_sharded_data_parallel import FSDP, has_FSDP
 from fairseq.file_io import PathManager
 from fairseq.models import FairseqDecoder, FairseqEncoder
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, open_dict, OmegaConf
+
+import clonefuse as cf
+
 
 logger = logging.getLogger(__name__)
 
@@ -490,6 +493,19 @@ def load_model_ensemble_and_task(
                     and "num_updates" in state["optimizer_history"][-1]
                 ):
                     model.set_num_updates(state["optimizer_history"][-1]["num_updates"])
+                model = task.build_model(cfg.model)
+                if getattr(cfg.common, "clonefuse", 0) > 1:
+                    logger.info(f"***** CLONE FUSING *****")
+                    if cfg.common.clone_type == 'linear':
+                        clonable_types = [torch.nn.Linear, torch.nn.modules.conv._ConvNd]
+                    elif cfg.common.clone_type == 'block':
+                        clonable_types = [Block]
+                    elif cfg.common.clone_type == 'both':
+                        clonable_types = [torch.nn.Linear, torch.nn.modules.conv._ConvNd, Block]
+                    else:
+                        raise NotImplementedError
+                    model, _ = cf.clone(model, clone_first=cfg.common.clone_first, clone_last=cfg.common.clone_last, 
+                                            num_clones=cfg.common.clonefuse, clonable_types=clonable_types, sync_processes=True)
                 model.load_state_dict(
                     state["model"], strict=strict, model_cfg=cfg.model
                 )
