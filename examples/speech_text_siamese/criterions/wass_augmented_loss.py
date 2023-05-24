@@ -448,7 +448,7 @@ class CtcWassersteinCriterion(CtcCriterion):
                                                     net_output=net_output,
                                                     net_input=net_input,
                                                     compute_dist_decoder=self.compute_dist_decoder,
-                                                    encoder_out_key="encoder_out",
+                                                    speech_encoder_out_key="encoder_out",
                                                     )
                 loss += self.ot_weight * wass_loss
                 extra["wass_loss"] = wass_loss
@@ -459,7 +459,8 @@ class CtcWassersteinCriterion(CtcCriterion):
                                                     net_output=net_output,
                                                     net_input=net_input,
                                                     compute_dist_decoder=self.compute_dist_decoder,
-                                                    encoder_out_key="embed_src_tokens",
+                                                    speech_encoder_out_key="severed_encoder_out",
+                                                    text_encoder_out_key="embed_src_tokens"
                                                     )
                 loss += self.ot_weight_embed * wass_loss_embed
                 extra["wass_loss_embed"] = wass_loss_embed
@@ -783,7 +784,8 @@ class CtcWassersteinCriterion(CtcCriterion):
                             net_input=None,
                             compute_dist_decoder=False,
                             ot_spch_dec_and_ctc_out=False,
-                            encoder_out_key="encoder_out"):
+                            speech_encoder_out_key="encoder_out",
+                            text_encoder_out_key="encoder_out"):
         if compute_dist_decoder:
             if not ot_spch_dec_and_ctc_out:
                 assert net_output is not None
@@ -805,8 +807,9 @@ class CtcWassersteinCriterion(CtcCriterion):
                     ).sum()
             return wass_loss
         
-        speech_out = encoder_out[0][encoder_out_key][0] # S x B x D
-        text_out = encoder_out[-1][encoder_out_key][0] # T x B x D
+        speech_out = encoder_out[0][speech_encoder_out_key][0] # S x B x D
+        text_out = encoder_out[-1][text_encoder_out_key][0] # T x B x D
+        # logging.info(f"speech_out: {speech_out.size()}, text_out: {text_out.size()}")
         # wloss = SamplesLoss(loss=self.ot_loss, 
         #                     p=self.ot_p, 
         #                     blur=self.ot_blur,
