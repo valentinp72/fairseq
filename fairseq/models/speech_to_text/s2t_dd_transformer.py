@@ -68,10 +68,25 @@ class S2TDualDecoderTransformerModel(FairseqEncoderDecoderModel):
         parser.add_argument('--dual-lang-pairs', type=str, default=None,
                             help="Language pairs in training, separated by comma.\
                             Required if --dual-attn-lang is set to True")
+        parser.add_argument("--load-pretrain-speech-encoder",
+                            type=str,
+                            default="",
+                            metavar="EXPR",
+                            help=""" path to the pretrained speech encoder """,
+                        )
 
     @classmethod
     def build_encoder(cls, args):
-        return S2TTransformerModel.build_encoder(args)
+        encoder = S2TTransformerModel.build_encoder(args)
+        if getattr(args, "load_pretrain_speech_encoder", "") != "":
+            logging.info(f"Loading pretrained speech encoder ...")
+            state = checkpoint_utils.load_checkpoint_to_cpu(args.load_pretrain_speech_encoder)
+            ckpt_component_type = ["encoder.spch_encoder"] \
+                if any([key.startswith("encoder.spch_encoder") for key in state["model"].keys()]) else ["encoder"]
+            checkpoint_utils.load_pretrained_component_from_model_different_keys(encoder, 
+                state, ckpt_component_types=ckpt_component_type)
+            logging.info(f"Loaded pretrained speech encoder from {args.load_pretrain_speech_encoder}")
+        return encoder
 
     @classmethod
     def build_decoder(cls, args, task, embed_tokens):

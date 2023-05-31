@@ -186,14 +186,15 @@ class LabelSmoothedCrossEntropyDDCriterion(FairseqCriterion):
                 n_correct_p = utils.item(
                 sum(log.get(f"n_correct_task{i}", 0) for log in logging_outputs))
                 metrics.log_scalar(f"n_correct_task{i}", n_correct_p)
-                metrics.log_derived(
-                f"acc_task{i}",
-                lambda meters: round(
-                    meters[f"n_correct_task{i}"].sum * 100.0 / meters[f"total_task{i}"].sum, 3
-                )
-                if meters[f"total_task{i}"].sum > 0
-                else float("nan"),
-            )
+                metrics.log_scalar(f"acc_task{i}", round(n_correct_p/total_p, 3))
+                # metrics.log_derived(
+                # f"acc_task{i}",
+                # lambda meters: round(
+                #     meters[f"n_correct_task{i}"].sum * 100.0 / meters[f"total_task{i}"].sum, 3
+                # )
+                # if meters[f"total_task{i}"].sum > 0
+                # else float("nan"),
+            # )
 
 
     @staticmethod

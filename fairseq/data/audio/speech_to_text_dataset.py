@@ -205,6 +205,11 @@ class SpeechToTextDataset(FairseqDataset):
         text = self.tokenize(self.pre_tokenizer, text)
         text = self.tokenize(self.bpe_tokenizer, text)
         return text
+    
+    def get_tokenized_text(self, index: int, subtask_index: int):
+        text = self.tokenize(self.pre_tokenizer, self.texts[subtask_index][index])
+        text = self.tokenize(self.bpe_tokenizer, text)
+        return text
 
     def pack_frames(self, feature: torch.Tensor):
         if self.n_frames_per_step == 1:
@@ -303,11 +308,13 @@ class SpeechToTextDataset(FairseqDataset):
             target, tokenized = [None, None], [None, None]
             if self.texts is not None:
                 for i in range(len(self.subtasks)):
-                    tokenized[i] = self.tokenize_text(self.texts[i][index])
+                    tokenized[i] = self.get_tokenized_text(index, i)
+                    # logging.info(f"tokenized[{i}]: {tokenized[i]}")
                     target[i] = self.tgt_dict.encode_line(
                         tokenized[i], add_if_not_exist=False, append_eos=True
                     ).long()
-                    if self.data_cfg.prepend_tgt_lang_tag:
+                    # logging.info(f"target[{i}]: {target[i]}")
+                    if self.cfg.prepend_tgt_lang_tag:
                         lang_tag = self.LANG_TAG_TEMPLATE.format(self.langs[i][index])
                         lang_tag_idx = self.tgt_dict.index(lang_tag)
                         target[i] = torch.cat((torch.LongTensor([lang_tag_idx]), target[i]), 0)
@@ -427,7 +434,7 @@ class SpeechToTextDataset(FairseqDataset):
                 t_len = len(tokenized.split(" "))
         else:
             if self.texts is not None:
-                tokenized = tuple([self.tokenize_text(self.texts[i][index]) for i in range(len(self.subtasks))])
+                tokenized = tuple([self.get_tokenized_text(index, i) for i in range(len(self.subtasks))])
                 t_len = max([len(tokenized[i].split(" ")) for i in range(len(self.subtasks))])
         return self.n_frames[index], t_len
 
