@@ -6,31 +6,53 @@ from typing import Dict, List, Optional, Tuple
 
 import torch.nn as nn
 import torch.nn.functional as F
-from fairseq import checkpoint_utils, utils
-from fairseq.data.data_utils import lengths_to_padding_mask
+from fairseq import checkpoint_utils
 from fairseq.models import (
-    FairseqEncoder,
+    FairseqDecoder,
     FairseqEncoderDecoderModel,
     register_model,
     register_model_architecture,
 )
-from fairseq.models.transformer import Embedding, TransformerDecoder
+from fairseq.models.transformer import Embedding
 from fairseq.models.transformer_dd import TransformerDualDecoder
 from fairseq.models.speech_to_text.s2t_transformer import (
-    Conv1dSubsampler,
-    S2TTransformerEncoder,
-    S2TTransformerModel
-)
-from fairseq.modules import (
-    FairseqDropout,
-    LayerNorm,
-    PositionalEmbedding,
-    TransformerEncoderLayer,
+    S2TTransformerModel,
+    TransformerDecoderScriptable,
 )
 from torch import Tensor
 
 
 logger = logging.getLogger(__name__)
+
+
+class MultiOutputDecoder(FairseqDecoder):
+    def __init__(
+        self, 
+        dictionary,
+        decoder_asr,
+        decoder_st,
+    ):
+        super().__init__(dictionary)
+        self.decoder_asr = decoder_asr
+        self.decoder_st = decoder_st
+
+    def forward(
+        self, 
+        prev_output_tokens, 
+        encoder_out,
+        **kwargs
+    ):
+        decoder_asr_out = self.decoder_asr(prev_output_tokens[0], encoder_out)
+        decoder_st_out = self.decoder_st(prev_output_tokens[1], encoder_out)
+        # logging.info(f'decoder_asr_out[0]: {decoder_asr_out[0]}')
+        x = (decoder_asr_out[0], decoder_st_out[0])
+        attn = (
+            decoder_asr_out[1]["attn"], decoder_st_out[1]["attn"]
+        )
+        inner_states = (
+            decoder_asr_out[1]["inner_states"], decoder_st_out[1]["inner_states"]
+        )
+        return x, {"attn": [attn], "inner_states": inner_states}
 
 
 @register_model("s2t_dd_transformer")
@@ -68,12 +90,14 @@ class S2TDualDecoderTransformerModel(FairseqEncoderDecoderModel):
         parser.add_argument('--dual-lang-pairs', type=str, default=None,
                             help="Language pairs in training, separated by comma.\
                             Required if --dual-attn-lang is set to True")
-        parser.add_argument("--load-pretrain-speech-encoder",
+        parser.add_argument('--load-pretrain-speech-encoder',
                             type=str,
                             default="",
                             metavar="EXPR",
                             help=""" path to the pretrained speech encoder """,
                         )
+        parser.add_argument('--single-decoder', action="store_true",
+                            help="Use single decoder for the two outputs")
 
     @classmethod
     def build_encoder(cls, args):
@@ -81,39 +105,29 @@ class S2TDualDecoderTransformerModel(FairseqEncoderDecoderModel):
         if getattr(args, "load_pretrain_speech_encoder", "") != "":
             logging.info(f"Loading pretrained speech encoder ...")
             state = checkpoint_utils.load_checkpoint_to_cpu(args.load_pretrain_speech_encoder)
-            ckpt_component_type = ["encoder.spch_encoder"] \
-                if any([key.startswith("encoder.spch_encoder") for key in state["model"].keys()]) else ["encoder"]
-            checkpoint_utils.load_pretrained_component_from_model_different_keys(encoder, 
-                state, ckpt_component_types=ckpt_component_type)
+            ckpt_name = "encoder.spch_encoder"
+            ckpt_component_type = [ckpt_name] if any([key.startswith(ckpt_name) \
+                                    for key in state["model"].keys()]) else ["encoder"]
+            checkpoint_utils.load_pretrained_component_from_model_different_keys(
+                        encoder, state, ckpt_component_types=ckpt_component_type
+                        )
             logging.info(f"Loaded pretrained speech encoder from {args.load_pretrain_speech_encoder}")
         return encoder
 
     @classmethod
     def build_decoder(cls, args, task, embed_tokens):
-        decoder = TransformerDualDecoderScriptable(args, 
-                                                   task.target_dictionary, 
-                                                   embed_tokens
-                                                   )
-        if getattr(args, "decoder_asr_init_weights", None):
-            decoder = checkpoint_utils.load_decoder_weights(
-                component=decoder,
-                sub_component="asr",
-                checkpoint=args.decoder_asr_init_weights,
+        if getattr(args, "single_decoder", False):
+            decoder_asr = TransformerDecoderScriptable(
+                args, task.target_dictionary, embed_tokens
             )
-            logger.info(
-                f"loaded pretrained ASR decoder from: "
-                f"{args.decoder_asr_init_weights}"
+            decoder_st = TransformerDecoderScriptable(
+                args, task.target_dictionary, embed_tokens
             )
-        if getattr(args, "decoder_st_init_weights", None):
-            decoder = checkpoint_utils.load_decoder_weights(
-                component=decoder,
-                sub_component="st", 
-                checkpoint=args.decoder_st_init_weights,
-            )
-            logger.info(
-                f"loaded pretrained ST decoder from: "
-                f"{args.decoder_st_init_weights}"
-            )
+            decoder_asr = decoder_st
+            decoder = MultiOutputDecoder(task.target_dictionary, decoder_asr, decoder_st)
+            return decoder
+            
+        decoder = TransformerDualDecoderScriptable(args, task.target_dictionary, embed_tokens)
         return decoder
 
     @classmethod
@@ -133,9 +147,15 @@ class S2TDualDecoderTransformerModel(FairseqEncoderDecoderModel):
             padding_idx = dictionary.pad()
             return Embedding(num_embeddings, embed_dim, padding_idx)
 
-        decoder_embed_tokens = nn.ModuleDict({k: build_embedding(
-            task.target_dictionary, args.decoder_embed_dim
-        ) for k in args.subtasks})
+        if getattr(args, "single_decoder", False):
+            decoder_embed_tokens = build_embedding(
+                task.target_dictionary, args.decoder_embed_dim
+            )
+        else:
+            decoder_embed_tokens = nn.ModuleDict({k: build_embedding(
+                task.target_dictionary, args.decoder_embed_dim
+            ) for k in args.subtasks})
+            
         encoder = cls.build_encoder(args)
         decoder = cls.build_decoder(args, task, decoder_embed_tokens)
         return cls(encoder, decoder)
