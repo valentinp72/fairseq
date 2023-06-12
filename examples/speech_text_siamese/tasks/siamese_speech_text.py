@@ -193,9 +193,10 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
         self.src_dict = src_dict
         self.tgt_dict = tgt_dict
         self.langs = langs
-        logging.info(f"LANGS: {self.langs}")
+        logging.info(f"| langs: {self.langs}")
         self.data_cfg = S2TJointDataConfig(Path(args.data) / args.config_yaml)
         self.speech_only = getattr(args, "load_speech_only", False)
+        logging.info(f"| speech_only: {self.speech_only}")
         self.mask_idx = None
         self.mask_sym = "<mask>"
         if self.src_dict is not None:
