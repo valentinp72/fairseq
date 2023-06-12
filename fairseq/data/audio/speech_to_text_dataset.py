@@ -281,16 +281,18 @@ class SpeechToTextDataset(FairseqDataset):
         if self.subtasks is None:
             target = None
             if self.tgt_texts is not None:
-                tokenized = self.tokenize_text(self.tgt_texts[index])
+                tokenized = self.get_tokenized_tgt_text(index)
                 target = self.tgt_dict.encode_line(
                     tokenized, add_if_not_exist=False, append_eos=True
                 ).long()
-                if self.data_cfg.prepend_tgt_lang_tag:
+                if self.cfg.prepend_tgt_lang_tag:
                     lang_tag_idx = self.get_lang_tag_idx(
                         self.tgt_langs[index], self.tgt_dict,
                         style="s2t" if not any("_" in l for l in self.tgt_langs) else "mbart"
                     )
                     target = torch.cat((torch.LongTensor([lang_tag_idx]), target), 0)
+                    logging.info(f"lang_tag_idx: {lang_tag_idx}")
+                    logging.info(f"target: {target}")
             if self.cfg.prepend_bos_and_append_tgt_lang_tag:
                 bos = torch.LongTensor([self.tgt_dict.bos()])
                 lang_tag_idx = self.get_lang_tag_idx(self.tgt_langs[index], self.tgt_dict)
@@ -430,7 +432,7 @@ class SpeechToTextDataset(FairseqDataset):
         t_len = 0
         if self.subtasks is None:
             if self.tgt_texts is not None:
-                tokenized = self.tokenize_text(self.tgt_texts[index])
+                tokenized = self.get_tokenized_tgt_text(index)
                 t_len = len(tokenized.split(" "))
         else:
             if self.texts is not None:

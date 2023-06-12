@@ -261,6 +261,8 @@ class S2TTransformerModel(FairseqEncoderDecoderModel):
             type=int,
             metavar="N",
             help="freeze encoder for first N updates",
+        )
+        parser.add_argument(
             "--use-linear-before-cnn",
             action="store_true",
             help="if True, add one linear layer before CNN.",
@@ -410,53 +412,41 @@ class S2TTransformerEncoder(FairseqEncoder):
             self.embed_scale = 1.0
         self.padding_idx = 1
 
-        self.conv_version = args.conv_version
-        if self.conv_version == "s2t_transformer":
         self.use_linear_before_cnn = getattr(args, "use_linear_before_cnn", False)
         self.no_cnn = getattr(args, "no_cnn", False)
-        if not self.use_linear_before_cnn:
-            self.subsample = Conv1dSubsampler(
-                args.input_feat_per_channel * args.input_channels,
-                args.conv_channels,
-                args.encoder_embed_dim,
-                [int(k) for k in args.conv_kernel_sizes.split(",")],
-            )
+        self.conv_version = getattr(args, "conv_version", "s2t_transformer")
+        if self.conv_version == "s2t_transformer":
+            if not self.use_linear_before_cnn:
+                self.subsample = Conv1dSubsampler(
+                    args.input_feat_per_channel * args.input_channels,
+                    args.conv_channels,
+                    args.encoder_embed_dim,
+                    [int(k) for k in args.conv_kernel_sizes.split(",")],
+                )
+            else:
+                if self.no_cnn:
+                    self.in_linear =  nn.Sequential(
+                        nn.Linear(args.input_feat_per_channel, args.encoder_embed_dim),
+                        nn.ReLU(),
+                    )
+                else:
+                    self.in_linear =  nn.Sequential(
+                        nn.Linear(args.input_feat_per_channel, 80),
+                        nn.ReLU(),
+                    )
+                    self.subsample = Conv1dSubsampler(
+                        80 * args.input_channels,
+                        args.conv_channels,
+                        args.encoder_embed_dim,
+                        [int(k) for k in args.conv_kernel_sizes.split(",")],
+                        args.conv_stride,
+                )
         elif self.conv_version == "convtransformer":
             self.subsample = Conv2dSubsampler(
                 args.input_channels,
                 args.input_feat_per_channel,
                 args.conv_out_channels,
                 args.encoder_embed_dim,
-        else:
-            if self.no_cnn:
-                # self.in_linear =  nn.Linear(args.input_feat_per_channel, 80)
-                # self.in_linear =  nn.Sequential(
-                #     nn.Linear(args.input_feat_per_channel, args.input_feat_per_channel//2),
-                #     nn.ReLU(),
-                #     nn.Linear(args.input_feat_per_channel//2, args.encoder_embed_dim),
-                # )
-                # self.in_linear = nn.Linear(args.input_feat_per_channel, args.encoder_embed_dim)
-                self.in_linear =  nn.Sequential(
-                    nn.Linear(args.input_feat_per_channel, args.encoder_embed_dim),
-                    nn.ReLU(),
-                )
-            else:
-                # self.in_linear =  nn.Linear(args.input_feat_per_channel, 80)
-                # self.in_linear =  nn.Sequential(
-                #     nn.Linear(args.input_feat_per_channel, args.input_feat_per_channel//2),
-                #     nn.ReLU(),
-                #     nn.Linear(args.input_feat_per_channel//2, 80),
-                # )
-                self.in_linear =  nn.Sequential(
-                    nn.Linear(args.input_feat_per_channel, 80),
-                    nn.ReLU(),
-                )
-                self.subsample = Conv1dSubsampler(
-                    80 * args.input_channels,
-                    args.conv_channels,
-                    args.encoder_embed_dim,
-                    [int(k) for k in args.conv_kernel_sizes.split(",")],
-                    args.conv_stride,
             )
 
         self.embed_positions = PositionalEmbedding(
@@ -495,6 +485,7 @@ class S2TTransformerEncoder(FairseqEncoder):
             positions = self.embed_positions(encoder_padding_mask).transpose(0, 1) # max_len x bsz x D_model
             x += positions
         x = self.dropout_module(x)
+        embed_src_tokens = x
 
         encoder_states = []
 

@@ -1039,7 +1039,7 @@ class GenerationConfig(FairseqDataclass):
     eos_token: Optional[str] = field(
         default=None,
         metadata={"help": "EOS token"},
-    single_joint_beam: bool = field(
+    )
     independent_beams: bool = field(
         default=False, 
         metadata={"help": "Independent beams used in dual-decoder Transformer"},
