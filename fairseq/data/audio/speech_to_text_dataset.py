@@ -291,38 +291,32 @@ class SpeechToTextDataset(FairseqDataset):
                         style="s2t" if not any("_" in l for l in self.tgt_langs) else "mbart"
                     )
                     target = torch.cat((torch.LongTensor([lang_tag_idx]), target), 0)
-                    logging.info(f"lang_tag_idx: {lang_tag_idx}")
-                    logging.info(f"target: {target}")
             if self.cfg.prepend_bos_and_append_tgt_lang_tag:
                 bos = torch.LongTensor([self.tgt_dict.bos()])
                 lang_tag_idx = self.get_lang_tag_idx(self.tgt_langs[index], self.tgt_dict)
                 assert lang_tag_idx != self.tgt_dict.unk()
                 lang_tag_idx = torch.LongTensor([lang_tag_idx])
                 target = torch.cat((bos, target, lang_tag_idx), 0)
-
-            speaker_id = None
-            if self.speaker_to_id is not None:
-                speaker_id = self.speaker_to_id[self.speakers[index]]
-            return SpeechToTextDatasetItem(
-                index=index, source=source, target=target, speaker_id=speaker_id
-            )
         else:
             target, tokenized = [None, None], [None, None]
             if self.texts is not None:
                 for i in range(len(self.subtasks)):
                     tokenized[i] = self.get_tokenized_text(index, i)
-                    # logging.info(f"tokenized[{i}]: {tokenized[i]}")
                     target[i] = self.tgt_dict.encode_line(
                         tokenized[i], add_if_not_exist=False, append_eos=True
                     ).long()
-                    # logging.info(f"target[{i}]: {target[i]}")
                     if self.cfg.prepend_tgt_lang_tag:
                         lang_tag = self.LANG_TAG_TEMPLATE.format(self.langs[i][index])
                         lang_tag_idx = self.tgt_dict.index(lang_tag)
                         target[i] = torch.cat((torch.LongTensor([lang_tag_idx]), target[i]), 0)
             target = tuple(target)
-
-        return index, source, target
+        
+        speaker_id = None
+        if self.speaker_to_id is not None:
+            speaker_id = self.speaker_to_id[self.speakers[index]]
+        return SpeechToTextDatasetItem(
+            index=index, source=source, target=target, speaker_id=speaker_id
+        )
 
     def __len__(self):
         return self.n_samples
@@ -353,7 +347,7 @@ class SpeechToTextDataset(FairseqDataset):
             ntokens = None
             if self.tgt_texts is not None:
                 target = fairseq_data_utils.collate_tokens(
-                    [t for _, _, t in samples],
+                    [x.target for x in samples],
                     self.tgt_dict.pad(),
                     self.tgt_dict.eos(),
                     left_pad=False,
@@ -361,17 +355,17 @@ class SpeechToTextDataset(FairseqDataset):
                 )
                 target = target.index_select(0, order)
                 target_lengths = torch.tensor(
-                    [t.size(0) for _, _, t in samples], dtype=torch.long
+                    [x.target.size(0) for x in samples], dtype=torch.long
                 ).index_select(0, order)
                 prev_output_tokens = fairseq_data_utils.collate_tokens(
-                    [t for _, _, t in samples],
+                    [x.target for x in samples],
                     self.tgt_dict.pad(),
-                    self.tgt_dict.eos(),
+                    eos_idx=None,
                     left_pad=False,
                     move_eos_to_beginning=True,
                 )
                 prev_output_tokens = prev_output_tokens.index_select(0, order)
-                ntokens = sum(t.size(0) for _, _, t in samples)
+                ntokens = sum(x.target.size(0) for x in samples)
         else:
             target, target_lengths = [None, None], [None, None]
             prev_output_tokens = [None, None]
@@ -379,7 +373,7 @@ class SpeechToTextDataset(FairseqDataset):
             if self.texts is not None:
                 for i in range(len(self.subtasks)):
                     target[i] = fairseq_data_utils.collate_tokens(
-                        [t[i] for _, _, t in samples],
+                        [x.target[i] for x in samples],
                         self.tgt_dict.pad(),
                         self.tgt_dict.eos(),
                         left_pad=False,
@@ -387,17 +381,18 @@ class SpeechToTextDataset(FairseqDataset):
                     )
                     target[i] = target[i].index_select(0, order)
                     target_lengths[i] = torch.tensor(
-                        [t[i].size(0) for _, _, t in samples], dtype=torch.long
+                        [x.target[i].size(0) for x in samples], 
+                        dtype=torch.long
                     ).index_select(0, order)
                     prev_output_tokens[i] = fairseq_data_utils.collate_tokens(
-                        [t[i] for _, _, t in samples],
+                        [x.target[i] for x in samples],
                         self.tgt_dict.pad(),
-                        self.tgt_dict.eos(),
+                        eos_idx=None,
                         left_pad=False,
                         move_eos_to_beginning=True,
                     )
                     prev_output_tokens[i] = prev_output_tokens[i].index_select(0, order)
-                    ntokens[i] = sum(t[i].size(0) for _, _, t in samples)
+                    ntokens[i] = sum(x.target[i].size(0) for x in samples)
 
         speaker = None
         if self.speaker_to_id is not None:
@@ -671,6 +666,7 @@ class SpeechToTextDatasetCreator(object):
             pre_tokenizer=pre_tokenizer,
             bpe_tokenizer=bpe_tokenizer,
             n_frames_per_step=n_frames_per_step,
+            subtasks=subtasks,
             speaker_to_id=speaker_to_id,
         )
 
@@ -809,4 +805,4 @@ class SpeechToTextDatasetCreator(object):
                 for r, d in zip(size_ratios, datasets)
             ]
 
-        return ConcatDataset(datasets) if len(datasets) > 1 else datasets[0]
+        return ConcatDataset(datasets, homogeneous_batch=homogeneous_batch) if len(datasets) > 1 else datasets[0]

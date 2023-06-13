@@ -88,6 +88,7 @@ class LabelSmoothedCrossEntropyDDCriterion(FairseqCriterion):
         2) the sample size, which is used as the denominator for the gradient
         3) logging outputs to display while training
         """
+        # logging.info(f'**sample["net_input"]: {sample["net_input"]["prev_output_tokens"].size()}')
         net_output = model(**sample["net_input"])
         loss, nll_loss = self.compute_loss(model, net_output, sample, reduce=reduce, lambda_weight=self.lambda_weight)
         sample_size = (

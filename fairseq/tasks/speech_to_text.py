@@ -144,6 +144,7 @@ class SpeechToTextTask(LegacyFairseqTask):
         is_train_split = split.startswith("train")
         pre_tokenizer = self.build_tokenizer(self.args)
         bpe_tokenizer = self.build_bpe(self.args)
+        logging.info(f"self.args.subtasks: {self.args.subtasks}")
         self.datasets[split] = SpeechToTextDatasetCreator.from_tsv(
             root=self.args.data,
             cfg=self.data_cfg,
