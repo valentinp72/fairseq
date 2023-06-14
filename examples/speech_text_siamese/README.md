@@ -1,6 +1,6 @@
 # Pre-training for Speech Translation: CTC Meets Optimal Transport
 
-This is the codebase for the paper [Pre-training for Speech Translation: CTC Meets Optimal Transport](https://arxiv.org/abs/2301.11716).
+This is the codebase for the paper [Pre-training for Speech Translation: CTC Meets Optimal Transport](https://arxiv.org/abs/2301.11716), Le et al. (**ICML 2023, oral presentation**).
 
 # Table of Contents
 1. [Pre-trained models](#1-pre-trained-models)
@@ -231,8 +231,9 @@ fairseq-generate ${DATA_ROOT} \
 
 # 5. References
 If you find the resources in this repository useful, please cite the following paper:
-```
-@article{le2023pretraining,
+
+```bibtex
+@inproceedings{le2023pretraining,
   author    = {Phuong{-}Hang Le and
                Hongyu Gong and
                Changhan Wang and
@@ -240,24 +241,8 @@ If you find the resources in this repository useful, please cite the following p
                Benjamin Lecouteux and
                Didier Schwab},
   title     = {Pre-training for Speech Translation: {CTC} Meets Optimal Transport},
-  journal   = {CoRR},
-  volume    = {abs/2301.11716},
+  booktitle   = {Proceedings of the 40th International Conference on Machine Learning},
+  volume    = {PMLR 202},
   year      = {2023}
-}
-```
-Our implementation is based on the `fairseq` and `fairseq S2T` toolkits.
-```
-@inproceedings{wang2020fairseqs2t,
-  title = {fairseq S2T: Fast Speech-to-Text Modeling with fairseq},
-  author = {Changhan Wang and Yun Tang and Xutai Ma and Anne Wu and Dmytro Okhonko and Juan Pino},
-  booktitle = {Proceedings of the 2020 Conference of the Asian Chapter of the Association for Computational Linguistics (AACL): System Demonstrations},
-  year = {2020},
-}
-
-@inproceedings{ott2019fairseq,
-  title = {fairseq: A Fast, Extensible Toolkit for Sequence Modeling},
-  author = {Myle Ott and Sergey Edunov and Alexei Baevski and Angela Fan and Sam Gross and Nathan Ng and David Grangier and Michael Auli},
-  booktitle = {Proceedings of NAACL-HLT 2019: Demonstrations},
-  year = {2019},
 }
 ```
