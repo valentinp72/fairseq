@@ -584,7 +584,7 @@ class TransformerDecoderScriptable(TransformerDecoder):
             alignment_layer,
             alignment_heads,
         )
-        extra = {"encoder_out": encoder_out} if incremental_state is None else None
+        # extra = {"encoder_out": encoder_out} if incremental_state is None else None
         return x, extra
 
 

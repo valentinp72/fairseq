@@ -134,13 +134,13 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
             default=400,
             help="maximum tokens for per encoder text input ",
         )
-        parser.add_argument(
-            "--mask-prob",
-            default=0.15,
-            type=float,
-            metavar="N",
-            help="",
-        )
+        # parser.add_argument(
+        #     "--mask-prob",
+        #     default=0.15,
+        #     type=float,
+        #     metavar="N",
+        #     help="",
+        # )
         parser.add_argument(
             "--mask-multiple-length",
             default=3,
@@ -396,7 +396,7 @@ class SiameseSpeechTextToTextTask(SpeechTextJointToTextTask):
             epoch=epoch,
             seed=self.args.seed,
             mask_sym=self.mask_sym,
-            mask_prob=self.args.mask_prob,
+            mask_prob=getattr(self.args, "mask_prob", 0.0),
             mask_multiple_length=int(self.args.mask_multiple_length),
             speech_only=self.speech_only,
             text_encoder_langtok=getattr(self.args, "text_encoder_langtok", None),
