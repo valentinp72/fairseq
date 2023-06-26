@@ -338,7 +338,7 @@ Additional arguments to be added to the command line:
 ```
 
 ### Pre-training with CTC+OT loss
-``bash
+```bash
 CONFIG_YAML=config_phoneme_asr.yaml
 TRAIN_SUBSET=train_asr_pho
 VALID_SUBDET=dev_asr_pho
