@@ -65,6 +65,7 @@ class DecodingConfig(DecoderConfig, FlashlightDecoderConfig):
 @dataclass
 class InferConfig(FairseqDataclass):
     task: Any = None
+    model: Any = None
     decoding: DecodingConfig = DecodingConfig()
     common: CommonConfig = CommonConfig()
     common_eval: CommonEvalConfig = CommonEvalConfig()
@@ -394,6 +395,8 @@ def main(cfg: InferConfig) -> float:
         The final WER if `wer` is None, otherwise None.
     """
 
+    # make sure the distributed workers also have access to user defined modules
+    utils.import_user_module(cfg.common)
     yaml_str, wer_file = OmegaConf.to_yaml(cfg.decoding), get_wer_file(cfg)
 
     # Validates the provided configuration.
