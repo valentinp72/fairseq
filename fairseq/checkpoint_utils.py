@@ -29,7 +29,10 @@ from fairseq.file_io import PathManager
 from fairseq.models import FairseqDecoder, FairseqEncoder
 from omegaconf import DictConfig, open_dict, OmegaConf
 
-import clonefuse as cf
+try:
+    import clonefuse as cf
+except ImportError:
+    print("clonefuse is not found")
 
 
 logger = logging.getLogger(__name__)

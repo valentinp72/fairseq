@@ -45,6 +45,10 @@ class AudioPretrainingConfig(FairseqDataclass):
         default=None,
         metadata={"help": "extension of the label file to load, used for fine-tuning"},
     )
+    subsample_csv: Optional[str] = field(
+        default=None,
+        metadata={"help": "List of flac files to load for the INA dataset"}
+    )
     multi_corpus_keys: Optional[str] = field(
         default=None,
         metadata={"help": "Comma separated names for loading multi corpus datasets"})
@@ -133,7 +137,19 @@ class AudioPretrainingTask(FairseqTask):
         if compute_mask:
             mask_args = task_cfg.precompute_mask_config
 
-        if getattr(task_cfg, "binarized_dataset", False):
+        if task_cfg.subsample_csv is not None:
+            from pantagruel.data.audio_dataset import FileCSVAudioDataset
+            self.datasets[split] = FileCSVAudioDataset(
+                source_data_dir=data_path,
+                samples_names_csv=f"{data_path}/subsamples/{task_cfg.subsample_csv}/{split}.csv",
+                sample_rate=task_cfg.get("sample_rate", self.cfg.sample_rate),
+                pad=task_cfg.labels is not None or task_cfg.enable_padding,
+                normalize=task_cfg.normalize,
+                num_buckets=self.cfg.num_batch_buckets or int(self.cfg.tpu),
+                compute_mask=compute_mask,
+                **mask_args,
+            )
+        elif getattr(task_cfg, "binarized_dataset", False):
             self.datasets[split] = BinarizedAudioDataset(
                 data_path,
                 split=split,

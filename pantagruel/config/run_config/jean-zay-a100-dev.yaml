@@ -1,0 +1,15 @@
+# @package _global_
+
+hydra:
+  launcher:
+    timeout_min: 120
+    name: ${hydra.job.name}
+    account: oou@a100
+    nodes: 1
+    gres: gpu:1
+    qos: qos_gpu_a100-dev
+    constraint: a100
+    partition: gpu_p5
+
+distributed_training:
+  distributed_world_size: 1

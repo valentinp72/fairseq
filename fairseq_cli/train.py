@@ -13,8 +13,12 @@ import math
 import os
 import sys
 from typing import Dict, Optional, Any, List, Tuple, Callable
-import clonefuse as cf
+
+try:
+    import clonefuse as cf
 # from clonefuse import Block
+except ImportError:
+    print("clonefuse is not found")
 
 # We need to setup root logger before importing any fairseq libraries.
 logging.basicConfig(

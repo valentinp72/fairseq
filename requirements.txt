@@ -1,0 +1,18 @@
+-e git+https://github.com/formiel/transformers.git@pantagruel\#egg=transformers
+datasets
+librosa
+soundfile
+ipython
+ipdb
+numpy
+pandas
+pandarallel
+matplotlib
+tensorboardx
+tensorboard
+torchvision
+timm
+editdistance
+shyaml
+accelerate
+hydra-submitit-launcher
